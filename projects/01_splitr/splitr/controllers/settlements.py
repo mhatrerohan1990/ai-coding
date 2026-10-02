@@ -1,12 +1,13 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint
 
 from ..services import settlements as settlements_service
-from ._http import json_body
+from ._http import idempotent, json_body
 
 bp = Blueprint("settlements", __name__)
 
 
 @bp.post("/groups/<int:group_id>/settlements")
+@idempotent
 def settle(group_id):
     """POST /groups/<id>/settlements: record that one member paid another.
 
@@ -18,4 +19,4 @@ def settle(group_id):
     settlement = settlements_service.record_settlement(
         group_id, data["from"], data["to"], data["amount"]
     )
-    return jsonify(id=settlement.id), 201
+    return {"id": settlement.id}, 201

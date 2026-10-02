@@ -3,12 +3,13 @@ from flask import Blueprint, jsonify
 from ..services import balances as balances_service
 from ..services import groups as groups_service
 from ..services import settle_up as settle_up_service
-from ._http import json_body
+from ._http import idempotent, json_body
 
 bp = Blueprint("groups", __name__)
 
 
 @bp.post("/groups")
+@idempotent
 def create_group():
     """POST /groups: create a group from existing users.
 
@@ -18,7 +19,7 @@ def create_group():
     """
     data = json_body("name", "members")
     group = groups_service.create_group(data["name"], data["members"])
-    return jsonify(id=group.id), 201
+    return {"id": group.id}, 201
 
 
 @bp.get("/groups/<int:group_id>/balances")

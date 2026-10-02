@@ -87,16 +87,20 @@ def add_expense(group_id, paid_by, amount, description="", split_among=None):
             [Share(expense.id, user_id, share) for user_id, share in shares.items()]
         )
 
-    # Notify only after the data is durably committed. Emails are queued on a
-    # background worker so the request does not wait on the mail provider, and
-    # a queueing failure must never fail an expense that has already been saved.
-    try:
-        payer_name = next(m.name for m in members if m.id == paid_by)
-        notifier.notify_expense_async(
-            [asdict(m) for m in members], payer_name, amount, description, shares
-        )
-    except Exception:
-        log.exception("expense %s saved but notification was not queued", expense.id)
+    # Notify only after the data is durably committed (after the *outermost*
+    # transaction, which may belong to the idempotency layer), so a rolled-back
+    # or replayed request never sends email. Emails are queued on a background
+    # worker, and a failure here must never fail an expense that is already saved.
+    def notify():
+        try:
+            payer_name = next(m.name for m in members if m.id == paid_by)
+            notifier.notify_expense_async(
+                [asdict(m) for m in members], payer_name, amount, description, shares
+            )
+        except Exception:
+            log.exception("expense %s saved but notification was not queued", expense.id)
+
+    db.after_commit(notify)
     return expense, shares
 
 

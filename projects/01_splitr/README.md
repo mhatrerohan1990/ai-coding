@@ -49,6 +49,22 @@ Aim for **60 minutes**. Write your start time in `NOTES.md` before you begin.
 | POST | `/groups/<id>/settlements` | `{"from", "to", "amount"}` | record that user `from` paid user `to` back |
 | GET | `/groups/<id>/settle-up` | | suggested payments that settle the group (read-only; each entry's `from`/`to`/`amount` can be POSTed to `/settlements` as-is) |
 
+## Retrying safely (idempotency)
+
+Every `POST` accepts an optional `Idempotency-Key` header. Send the same key when you retry (a timeout,
+a dropped connection) and the server applies the request once and replays the original response,
+marked `Idempotent-Replayed: true`, instead of creating a duplicate expense or a second round of emails.
+
+```bash
+curl -s -XPOST localhost:8080/groups/1/expenses -H "$H" -H 'Idempotency-Key: 7c1e-dinner' \
+  -d "{\"paid_by\":\"$A\",\"amount\":40}"     # run it twice: same expense id, one expense
+```
+
+- Same key, same request: the saved response is replayed. Same key, different request: `409`.
+- Failed requests (400/404/500) are not remembered, so a corrected retry with the same key works.
+- Keys are remembered for 24 hours. Without the header, a retry creates a duplicate.
+- Timestamps (`created_at`) are ISO 8601 in UTC, e.g. `2026-10-02T12:00:00.123456+00:00`.
+
 ## Architecture
 
 ```
@@ -58,9 +74,10 @@ splitr/
   services/        business rules, validation, transaction boundaries (no Flask, no SQL)
   repositories/    all SQL; returns model objects, never commits
   models/          plain frozen dataclasses: User, Group, Expense, Share, Settlement, Balance
-  db.py            per-thread connections, db.transaction(), db.read_snapshot()
+  db.py            per-thread connections, nestable db.transaction(), db.after_commit(), db.read_snapshot()
   notifier.py      email adapter + background queue
-  errors.py        ValidationError (400), NotFound (404)
+  errors.py        ValidationError (400), NotFound (404), Conflict (409)
+  clock.py         the single source of (UTC) time
   validation.py    shared input validators
 ```
 
@@ -93,5 +110,5 @@ curl -s -XPOST localhost:8080/groups/1/expenses -H "$H" -d "{\"paid_by\":\"$A\",
 curl -s localhost:8080/groups/1/balances
 ```
 
-If you have a `splitr.db` from an older version, delete it: the schema changed (users, group_members)
-and the app refuses to open an old-layout database.
+If you have a `splitr.db` from the original (name-based) version, delete it: the app refuses to open that
+layout. A database from the users/group_members version is upgraded in place.

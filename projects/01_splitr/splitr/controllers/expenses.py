@@ -1,12 +1,13 @@
 from flask import Blueprint, jsonify, request
 
 from ..services import expenses as expenses_service
-from ._http import int_arg, json_body
+from ._http import idempotent, int_arg, json_body
 
 bp = Blueprint("expenses", __name__)
 
 
 @bp.post("/groups/<int:group_id>/expenses")
+@idempotent
 def add_expense(group_id):
     """POST /groups/<id>/expenses: log an expense and split it.
 
@@ -21,7 +22,7 @@ def add_expense(group_id):
         k: data[k] for k in ("paid_by", "amount", "description", "split_among") if k in data
     }
     expense, shares = expenses_service.add_expense(group_id, **payload)
-    return jsonify(id=expense.id, shares=shares), 201
+    return {"id": expense.id, "shares": shares}, 201
 
 
 @bp.get("/groups/<int:group_id>/expenses")

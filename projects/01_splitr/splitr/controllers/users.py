@@ -3,12 +3,13 @@ from dataclasses import asdict
 from flask import Blueprint, jsonify
 
 from ..services import users as users_service
-from ._http import json_body
+from ._http import idempotent, json_body
 
 bp = Blueprint("users", __name__)
 
 
 @bp.post("/users")
+@idempotent
 def create_user():
     """POST /users: create a user.
 
@@ -17,7 +18,7 @@ def create_user():
     """
     data = json_body("name")
     user = users_service.create_user(data["name"], data.get("email"))
-    return jsonify(id=user.id), 201
+    return {"id": user.id}, 201
 
 
 @bp.get("/users/<user_id>")

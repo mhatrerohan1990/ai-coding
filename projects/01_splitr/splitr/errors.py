@@ -12,3 +12,7 @@ class GroupNotFound(NotFound):
 
 class UserNotFound(NotFound):
     """The user id does not exist."""
+
+
+class Conflict(Exception):
+    """The request clashes with an earlier one (e.g. a reused idempotency key); maps to HTTP 409."""

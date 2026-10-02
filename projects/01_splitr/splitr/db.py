@@ -1,6 +1,9 @@
+import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
+
+log = logging.getLogger(__name__)
 
 _path = "splitr.db"
 _local = threading.local()  # one connection (and transaction state) per thread
@@ -8,7 +11,10 @@ _schema_lock = threading.Lock()
 _schema_ready = set()  # database paths whose schema has been created
 BUSY_TIMEOUT_SECONDS = 10
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+# Older versions whose tables are a subset of the current schema: opening one just
+# adds the missing tables (CREATE TABLE IF NOT EXISTS) and bumps the version.
+UPGRADABLE_FROM = (2,)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -56,7 +62,16 @@ CREATE TABLE IF NOT EXISTS settlements (
     FOREIGN KEY (group_id, to_user_id) REFERENCES group_members(group_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+    key TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    status INTEGER,
+    body TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_expenses_group ON expenses(group_id);
+CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at);
 CREATE INDEX IF NOT EXISTS idx_settlements_group ON settlements(group_id);
 CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
 """
@@ -65,9 +80,9 @@ CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
 def _ensure_schema(path):
     """Create the tables (and switch to WAL) once per database path.
 
-    The schema version is stored in ``PRAGMA user_version``. A database created
-    by an older version of the app has tables but a different version; it is
-    refused rather than silently mixed with the new layout (no migrations yet).
+    The schema version is stored in ``PRAGMA user_version``. Versions listed in
+    ``UPGRADABLE_FROM`` only lack newer tables and are upgraded in place; any
+    other older layout is refused rather than silently mixed with the new one.
 
     Raises:
         RuntimeError: If ``path`` holds a database with an older schema.
@@ -81,7 +96,7 @@ def _ensure_schema(path):
             has_tables = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'groups'"
             ).fetchone()
-            if has_tables and version != SCHEMA_VERSION:
+            if has_tables and version not in (SCHEMA_VERSION, *UPGRADABLE_FROM):
                 raise RuntimeError(
                     "%s uses an old schema (version %s, need %s); "
                     "delete it to start fresh" % (path, version, SCHEMA_VERSION)
@@ -153,14 +168,52 @@ def transaction():
     """Run a block as one atomic unit: commit on success, roll back on any error.
 
     Services use this to group several repository writes (e.g. an expense and
-    its shares) so they are saved together or not at all.
+    its shares) so they are saved together or not at all. It nests: an inner
+    ``transaction()`` joins the outer one, and only the outermost block commits
+    or rolls back, so a caller (e.g. the idempotency layer) can make a whole
+    service call atomic with its own bookkeeping.
 
     Yields:
         The thread's ``sqlite3.Connection``.
     """
     conn = get_conn()
-    with conn:
-        yield conn
+    if getattr(_local, "depth", 0) > 0:
+        _local.depth += 1
+        try:
+            yield conn
+        finally:
+            _local.depth -= 1
+        return
+
+    _local.depth, _local.after_commit = 1, []
+    try:
+        with conn:
+            yield conn
+    except BaseException:
+        _local.after_commit = []  # rolled back: the queued side effects must not happen
+        raise
+    finally:
+        _local.depth = 0
+
+    callbacks, _local.after_commit = _local.after_commit, []
+    for callback in callbacks:
+        try:
+            callback()
+        except Exception:
+            log.exception("after-commit callback failed")
+
+
+def after_commit(callback):
+    """Run ``callback`` once the current transaction has committed.
+
+    Inside ``transaction()`` the callback is held until the outermost block
+    commits, and dropped if it rolls back (use it for side effects such as
+    sending email). Outside any transaction it runs immediately.
+    """
+    if getattr(_local, "depth", 0) > 0:
+        _local.after_commit.append(callback)
+    else:
+        callback()
 
 
 @contextmanager

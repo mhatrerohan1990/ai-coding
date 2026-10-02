@@ -900,6 +900,247 @@ def test_timestamps_sort_chronologically(client, ids, group_id, monkeypatch):
     assert [e["description"] for e in res.get_json()["expenses"]] == ["e2", "e1", "e0"]
 
 
+# --- idempotency ---------------------------------------------------------------
+
+
+def post_with_key(client, path, body, key="key-1"):
+    return client.post(path, json=body, headers={"Idempotency-Key": key})
+
+
+def _sent_emails(monkeypatch):
+    from splitr import notifier
+
+    sent = []
+    monkeypatch.setattr(notifier, "send_email", lambda to, s, b: sent.append(to))
+    return sent
+
+
+def test_repeating_an_expense_with_the_same_key_applies_it_once(client, ids, group_id, monkeypatch):
+    from splitr import notifier
+
+    sent = _sent_emails(monkeypatch)
+    path = f"/groups/{group_id}/expenses"
+    body = {"paid_by": ids["alice"], "amount": 90, "description": "dinner"}
+
+    first = post_with_key(client, path, body)
+    second = post_with_key(client, path, body)
+    notifier.wait_for_pending(timeout=5)
+
+    assert first.status_code == second.status_code == 201
+    assert first.get_json() == second.get_json()  # same expense id and shares
+    assert "Idempotent-Replayed" not in first.headers
+    assert second.headers["Idempotent-Replayed"] == "true"
+    assert _count("expenses") == 1
+    assert _count("shares") == 3
+    assert len(sent) == 3  # one email per member, not six
+    assert balances_by_name(client, group_id) == {"alice": 60, "bob": -30, "carol": -30}
+
+
+def test_retry_with_reordered_json_keys_is_still_a_replay(client, ids, group_id):
+    path = f"/groups/{group_id}/expenses"
+    first = post_with_key(client, path, {"paid_by": ids["alice"], "amount": 30})
+    second = post_with_key(client, path, {"amount": 30, "paid_by": ids["alice"]})
+    assert second.headers["Idempotent-Replayed"] == "true"
+    assert first.get_json() == second.get_json()
+    assert _count("expenses") == 1
+
+
+def test_without_a_key_a_retry_is_not_deduplicated(client, ids, group_id):
+    path = f"/groups/{group_id}/expenses"
+    body = {"paid_by": ids["alice"], "amount": 30}
+    assert client.post(path, json=body).get_json()["id"] != client.post(path, json=body).get_json()["id"]
+    assert _count("expenses") == 2
+
+
+def test_a_different_key_is_a_new_request(client, ids, group_id):
+    path = f"/groups/{group_id}/expenses"
+    body = {"paid_by": ids["alice"], "amount": 30}
+    a = post_with_key(client, path, body, key="a")
+    b = post_with_key(client, path, body, key="b")
+    assert a.get_json()["id"] != b.get_json()["id"]
+    assert _count("expenses") == 2
+
+
+def test_reusing_a_key_for_a_different_request_is_a_conflict(client, ids, group_id):
+    path = f"/groups/{group_id}/expenses"
+    post_with_key(client, path, {"paid_by": ids["alice"], "amount": 30})
+
+    changed = post_with_key(client, path, {"paid_by": ids["alice"], "amount": 99})
+    assert changed.status_code == 409
+    assert "different request" in changed.get_json()["error"]
+
+    other_endpoint = post_with_key(client, "/users", {"name": "dana"})
+    assert other_endpoint.status_code == 409
+    assert _count("expenses") == 1
+    assert _count("users") == 3  # the fixture's three; dana was not created
+
+
+def test_every_post_endpoint_is_idempotent(client, ids, group_id):
+    for path, body, table in [
+        ("/users", {"name": "dana"}, "users"),
+        ("/groups", {"name": "g2", "members": [ids["alice"]]}, "groups"),
+        (
+            f"/groups/{group_id}/settlements",
+            {"from": ids["bob"], "to": ids["alice"], "amount": 5},
+            "settlements",
+        ),
+    ]:
+        before = _count(table)
+        first = post_with_key(client, path, body, key=f"key-{table}")
+        second = post_with_key(client, path, body, key=f"key-{table}")
+        assert first.status_code == second.status_code == 201
+        assert first.get_json() == second.get_json()
+        assert second.headers["Idempotent-Replayed"] == "true"
+        assert _count(table) == before + 1
+
+
+def test_a_failed_request_is_not_cached(client, ids, group_id):
+    path = f"/groups/{group_id}/expenses"
+    bad = post_with_key(client, path, {"paid_by": ids["alice"], "amount": -5})
+    assert bad.status_code == 400
+    assert _count("idempotency_keys") == 0  # the key was released
+
+    good = post_with_key(client, path, {"paid_by": ids["alice"], "amount": 5})
+    assert good.status_code == 201
+    assert "Idempotent-Replayed" not in good.headers
+
+
+def test_a_crash_midway_rolls_back_the_key_and_the_work(client, ids, group_id, monkeypatch):
+    from splitr.services import expenses as expense_service
+
+    path = f"/groups/{group_id}/expenses"
+    body = {"paid_by": ids["alice"], "amount": 20}
+    with monkeypatch.context() as patched:
+        patched.setattr(
+            expense_service,
+            "split_evenly",
+            lambda amount, people: {ids["alice"]: 10, ids["bob"]: object()},
+        )
+        assert post_with_key(client, path, body).status_code == 500
+    assert _count("expenses") == 0
+    assert _count("shares") == 0
+    assert _count("idempotency_keys") == 0
+
+    retry = post_with_key(client, path, body)  # same key, same body, now healthy
+    assert retry.status_code == 201
+    assert _count("expenses") == 1
+
+
+def test_simultaneous_duplicates_are_applied_once(client, ids, group_id):
+    import threading
+
+    app = client.application
+    path = f"/groups/{group_id}/expenses"
+    body = {"paid_by": ids["alice"], "amount": 40}
+    workers = 8
+    barrier = threading.Barrier(workers)
+    results = []
+
+    def send():
+        thread_client = app.test_client()
+        barrier.wait()
+        results.append(post_with_key(thread_client, path, body, key="race"))
+
+    threads = [threading.Thread(target=send) for _ in range(workers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert [r.status_code for r in results] == [201] * workers
+    assert len({r.get_json()["id"] for r in results}) == 1
+    assert sum("Idempotent-Replayed" in r.headers for r in results) == workers - 1
+    assert _count("expenses") == 1
+    assert _count("shares") == 3
+
+
+@pytest.mark.parametrize("key", ["", "  padded ", "x" * 256])
+def test_bad_idempotency_keys_are_rejected(client, key):
+    res = post_with_key(client, "/users", {"name": "dana"}, key=key)
+    assert res.status_code == 400
+    assert _count("users") == 0
+
+
+def test_expired_keys_are_forgotten(client, ids, group_id):
+    from splitr.db import get_conn
+
+    path = f"/groups/{group_id}/expenses"
+    body = {"paid_by": ids["alice"], "amount": 30}
+    post_with_key(client, path, body, key="old")
+    with get_conn() as conn:  # age the key past its time-to-live
+        conn.execute(
+            "UPDATE idempotency_keys SET created_at = '2000-01-01T00:00:00.000000+00:00'"
+        )
+
+    again = post_with_key(client, path, body, key="old")
+    assert again.status_code == 201
+    assert "Idempotent-Replayed" not in again.headers
+    assert _count("expenses") == 2
+    assert _count("idempotency_keys") == 1  # the stale row was purged, a fresh one stored
+
+
+def test_after_commit_runs_only_after_the_outermost_commit(client):
+    from splitr import db
+
+    events = []
+    with db.transaction() as conn:
+        with db.transaction():  # nested: joins the outer transaction
+            db.after_commit(lambda: events.append("callback"))
+            conn.execute("INSERT INTO groups (name) VALUES ('nested')")
+        assert events == []  # inner block ended, outer still open
+        assert conn.in_transaction
+    assert events == ["callback"]
+    assert _count("groups") == 1
+
+    db.after_commit(lambda: events.append("immediate"))  # no transaction open
+    assert events == ["callback", "immediate"]
+
+
+def test_after_commit_is_dropped_on_rollback(client):
+    from splitr import db
+
+    events = []
+    with pytest.raises(RuntimeError):
+        with db.transaction() as conn:
+            with db.transaction():
+                conn.execute("INSERT INTO groups (name) VALUES ('doomed')")
+                db.after_commit(lambda: events.append("should not run"))
+            raise RuntimeError("outer fails after the inner block succeeded")
+    assert events == []
+    assert _count("groups") == 0  # the inner block's write was rolled back too
+
+
+def test_a_failing_after_commit_callback_does_not_break_the_commit(client):
+    from splitr import db
+
+    def boom():
+        raise RuntimeError("callback bug")
+
+    with db.transaction() as conn:
+        conn.execute("INSERT INTO groups (name) VALUES ('kept')")
+        db.after_commit(boom)
+    assert _count("groups") == 1
+
+
+def test_a_version_2_database_is_upgraded_in_place(tmp_path):
+    from splitr import db
+
+    path = tmp_path / "v2.db"
+    create_app(str(path))
+    conn = sqlite3.connect(path)
+    conn.executescript("DROP TABLE idempotency_keys; PRAGMA user_version = 2;")
+    conn.close()
+    db._schema_ready.discard(str(path))
+
+    create_app(str(path))  # opens the "old" file
+    conn = sqlite3.connect(path)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    conn.close()
+    assert "idempotency_keys" in tables
+    assert version == db.SCHEMA_VERSION
+
+
 # --- architecture ------------------------------------------------------------
 
 
