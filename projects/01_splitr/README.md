@@ -65,6 +65,19 @@ curl -s -XPOST localhost:8080/groups/1/expenses -H "$H" -H 'Idempotency-Key: 7c1
 - Keys are remembered for 24 hours. Without the header, a retry creates a duplicate.
 - Timestamps (`created_at`) are ISO 8601 in UTC, e.g. `2026-10-02T12:00:00.123456+00:00`.
 
+## Tests
+
+`tests/` has one module per concern, with shared fixtures in `conftest.py` and plain helpers in `helpers.py`:
+
+| Module | Covers |
+|---|---|
+| `test_users`, `test_groups`, `test_expenses`, `test_balances`, `test_settlements` | the endpoints and their rules |
+| `test_splitting`, `test_settle_up` | the money maths (whole-cent splits, debt simplification) |
+| `test_listing`, `test_validation` | pagination/sorting and input validation |
+| `test_atomicity`, `test_transactions`, `test_concurrency` | all-or-nothing writes, nested transactions, parallel requests |
+| `test_notifications`, `test_idempotency`, `test_timestamps` | background email, safe retries, UTC times |
+| `test_schema`, `test_architecture` | database schema/versioning and the layering rules |
+
 ## Architecture
 
 ```
@@ -90,7 +103,7 @@ no Flask in services).
 From this folder, with the root venv activated (`source ../../.venv/bin/activate`):
 
 ```bash
-python -m pytest          # run the tests
+python -m pytest          # run the tests (one file: python -m pytest tests/test_idempotency.py)
 python run.py             # start the app at http://127.0.0.1:8080  (python run.py 8081 for another port)
 SPLITR_DEBUG=1 python run.py   # local development only: auto-reload + interactive debugger
 ```
