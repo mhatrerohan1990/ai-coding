@@ -47,6 +47,7 @@ Aim for **60 minutes**. Write your start time in `NOTES.md` before you begin.
 | GET | `/groups/<id>/expenses` | `?page=1&limit=20&sort=created_at` | list expenses (`limit` max 100; `sort` one of id, amount, description, created_at) |
 | GET | `/groups/<id>/balances` | | net balance per member, keyed by user id (positive = owed money) |
 | POST | `/groups/<id>/settlements` | `{"from", "to", "amount"}` | record that user `from` paid user `to` back |
+| GET | `/groups/<id>/settle-up` | | suggested payments that settle the group (read-only; each entry's `from`/`to`/`amount` can be POSTed to `/settlements` as-is) |
 
 ## Architecture
 
