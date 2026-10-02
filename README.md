@@ -18,7 +18,8 @@ source .venv/bin/activate
 
 | # | Project | Domain | Status |
 |---|---|---|---|
-| 01 | [splitr](projects/01_splitr) | Splitwise-style expense splitting (Flask + SQLite) | not started |
+| 01 | [splitr](projects/01_splitr) | Splitwise-style expense splitting (Flask + SQLite) · find bugs, 60 min | done, reviewed |
+| 02 | [quota_gate](projects/02_quota_gate) | Multi-tenant rate limiter with JWT auth (Okta-style) · build from spec, 3 h + live change | not started |
 
 ## Running a session
 
