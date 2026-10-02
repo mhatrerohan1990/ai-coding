@@ -31,7 +31,7 @@ def get_balances(group_id):
         for user_id, amount in expenses_repo.share_amounts(group_id):
             bal[user_id] = bal.get(user_id, 0.0) - amount
         for s in settlements_repo.list_for_group(group_id):
-            bal[s.from_user_id] = bal.get(s.from_user_id, 0.0) - s.amount
-            bal[s.to_user_id] = bal.get(s.to_user_id, 0.0) + s.amount
+            bal[s.from_user_id] = bal.get(s.from_user_id, 0.0) + s.amount
+            bal[s.to_user_id] = bal.get(s.to_user_id, 0.0) - s.amount
 
     return [Balance(uid, names.get(uid), round(v, 2)) for uid, v in bal.items()]
