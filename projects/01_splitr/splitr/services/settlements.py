@@ -1,6 +1,4 @@
-from datetime import datetime
-
-from .. import db, validation
+from .. import clock, db, validation
 from ..errors import ValidationError
 from ..models import Settlement
 from ..repositories import settlements as settlements_repo
@@ -35,5 +33,5 @@ def record_settlement(group_id, from_user, to_user, amount):
     validation.validate_amount(amount)
     with db.transaction():
         return settlements_repo.insert(
-            Settlement(None, group_id, from_user, to_user, amount, datetime.now().isoformat())
+            Settlement(None, group_id, from_user, to_user, amount, clock.utc_now_iso())
         )

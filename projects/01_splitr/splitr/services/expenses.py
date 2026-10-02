@@ -1,8 +1,7 @@
 import logging
 from dataclasses import asdict
-from datetime import datetime
 
-from .. import db, notifier, validation
+from .. import clock, db, notifier, validation
 from ..errors import ValidationError
 from ..models import Expense, Share
 from ..repositories import expenses as expenses_repo
@@ -82,7 +81,7 @@ def add_expense(group_id, paid_by, amount, description="", split_among=None):
 
     with db.transaction():  # expense + shares commit together or not at all
         expense = expenses_repo.insert(
-            Expense(None, group_id, paid_by, amount, description, datetime.now().isoformat())
+            Expense(None, group_id, paid_by, amount, description, clock.utc_now_iso())
         )
         expenses_repo.insert_shares(
             [Share(expense.id, user_id, share) for user_id, share in shares.items()]
