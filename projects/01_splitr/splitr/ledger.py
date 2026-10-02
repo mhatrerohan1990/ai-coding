@@ -1,10 +1,57 @@
 import logging
+import math
 from datetime import datetime
 
 from . import notifier
 from .db import get_conn
 
 log = logging.getLogger(__name__)
+
+
+class ValidationError(ValueError):
+    """The request data is invalid; the API maps this to HTTP 400."""
+
+
+class GroupNotFound(LookupError):
+    """The group id does not exist; the API maps this to HTTP 404."""
+
+
+def _is_name(value):
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _require_group(group_id):
+    """Raise ``GroupNotFound`` unless ``group_id`` exists."""
+    row = get_conn().execute("SELECT 1 FROM groups WHERE id = ?", (group_id,)).fetchone()
+    if row is None:
+        raise GroupNotFound("group %s not found" % group_id)
+
+
+def _validate_amount(amount):
+    """Require a finite positive number with at most 2 decimal places."""
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+        raise ValidationError("amount must be a number")
+    if not math.isfinite(amount) or amount <= 0:
+        raise ValidationError("amount must be greater than 0")
+    if abs(amount * 100 - round(amount * 100)) > 1e-6:
+        raise ValidationError("amount must have at most 2 decimal places")
+
+
+def _validate_members(name, members):
+    """Require a named group and a non-empty list of uniquely named members."""
+    if not _is_name(name):
+        raise ValidationError("name must be a non-empty string")
+    if not isinstance(members, list) or not members:
+        raise ValidationError("members must be a non-empty list")
+    seen = set()
+    for m in members:
+        if not isinstance(m, dict) or not _is_name(m.get("name")):
+            raise ValidationError("each member needs a non-empty name")
+        if m.get("email") is not None and not isinstance(m["email"], str):
+            raise ValidationError("member email must be a string")
+        if m["name"] in seen:
+            raise ValidationError("duplicate member name: %s" % m["name"])
+        seen.add(m["name"])
 
 
 def create_group(name, members):
@@ -19,7 +66,11 @@ def create_group(name, members):
 
     Returns:
         The new group's integer id.
+
+    Raises:
+        ValidationError: If the name or members are invalid.
     """
+    _validate_members(name, members)
     conn = get_conn()
     with conn:  # commits on success, rolls back on any exception
         cur = conn.execute("INSERT INTO groups (name) VALUES (?)", (name,))
@@ -86,10 +137,31 @@ def add_expense(group_id, paid_by, amount, description="", split_among=None):
 
     Returns:
         ``(expense_id, shares)`` where ``shares`` is ``{name: amount}``.
+
+    Raises:
+        GroupNotFound: If the group does not exist.
+        ValidationError: If the amount is not a positive number with at most 2
+            decimals, the payer or a participant is not a group member, a
+            participant is listed twice, or the description is not a string.
     """
+    _require_group(group_id)
     members = get_members(group_id)
+    names = {m["name"] for m in members}
+    _validate_amount(amount)
+    if paid_by not in names:
+        raise ValidationError("paid_by must be a member of the group")
+    if description is not None and not isinstance(description, str):
+        raise ValidationError("description must be a string")
     if not split_among:
         split_among = [m["name"] for m in members]
+    else:
+        if not isinstance(split_among, list):
+            raise ValidationError("split_among must be a list of member names")
+        if len(set(split_among)) != len(split_among):
+            raise ValidationError("split_among contains duplicates")
+        unknown = [n for n in split_among if n not in names]
+        if unknown:
+            raise ValidationError("split_among has non-members: %s" % unknown)
 
     shares = split_evenly(amount, split_among)
 
@@ -127,7 +199,11 @@ def list_expenses(group_id, page=1, limit=20, sort="created_at"):
 
     Returns:
         A list of dicts with id, paid_by, amount, description, created_at.
+
+    Raises:
+        GroupNotFound: If the group does not exist.
     """
+    _require_group(group_id)
     offset = (page - 1) * limit
     rows = get_conn().execute(
         f"SELECT id, paid_by, amount, description, created_at FROM expenses "
@@ -142,7 +218,20 @@ def record_settlement(group_id, from_member, to_member, amount):
 
     Returns:
         The new settlement's integer id.
+
+    Raises:
+        GroupNotFound: If the group does not exist.
+        ValidationError: If either party is not a member, they are the same
+            person, or the amount is not a positive number with at most 2
+            decimals.
     """
+    _require_group(group_id)
+    names = {m["name"] for m in get_members(group_id)}
+    if from_member not in names or to_member not in names:
+        raise ValidationError("from and to must be members of the group")
+    if from_member == to_member:
+        raise ValidationError("from and to must be different members")
+    _validate_amount(amount)
     conn = get_conn()
     cur = conn.execute(
         "INSERT INTO settlements (group_id, from_member, to_member, amount, created_at) "
@@ -163,7 +252,11 @@ def balances(group_id):
 
     Returns:
         A ``{name: balance}`` dict with values rounded to 2 decimals.
+
+    Raises:
+        GroupNotFound: If the group does not exist.
     """
+    _require_group(group_id)
     conn = get_conn()
     bal = {m["name"]: 0.0 for m in get_members(group_id)}
 
