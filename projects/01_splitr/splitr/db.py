@@ -1,7 +1,11 @@
 import sqlite3
+import threading
 
-_conn = None
 _path = "splitr.db"
+_local = threading.local()  # one connection (and transaction state) per thread
+_schema_lock = threading.Lock()
+_schema_ready = set()  # database paths whose schema has been created
+BUSY_TIMEOUT_SECONDS = 10
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS groups (
@@ -41,39 +45,67 @@ CREATE TABLE IF NOT EXISTS settlements (
 """
 
 
-def init(path):
-    """Point the module at a database file and (re)open the connection.
+def _ensure_schema(path):
+    """Create the tables (and switch to WAL) once per database path."""
+    with _schema_lock:
+        if path in _schema_ready:
+            return
+        conn = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SECONDS)
+        try:
+            # WAL lets readers run alongside the single writer.
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.executescript(SCHEMA)
+        finally:
+            conn.close()
+        _schema_ready.add(path)
 
-    Resets the cached module-level connection, so each call (e.g. one per test
-    via ``create_app``) starts from a fresh connection to ``path``.
+
+def init(path):
+    """Point the module at a database file and (re)open this thread's connection.
+
+    Creates the schema if needed and drops this thread's cached connection, so
+    each call (e.g. one per test via ``create_app``) starts from a fresh
+    connection to ``path``.
 
     Args:
         path: Filesystem path of the SQLite database file.
 
     Returns:
-        The new ``sqlite3.Connection``.
+        This thread's ``sqlite3.Connection``.
     """
-    global _conn, _path
+    global _path
     _path = path
-    _conn = None
+    close_conn()
     return get_conn()
 
 
 def get_conn():
-    """Return the shared SQLite connection, creating it on first use.
+    """Return the calling thread's SQLite connection, creating it on first use.
 
-    On creation it opens ``_path`` with ``check_same_thread=False`` (Flask
-    handles requests on several threads), sets ``sqlite3.Row`` as the row
-    factory so rows can be read by column name, and runs ``SCHEMA`` to create
-    any missing tables. One connection is shared process-wide.
+    Every thread gets its own connection, because a connection owns the open
+    transaction: sharing one across Flask's request threads would let one
+    request commit or roll back another's half-finished writes. A connection
+    uses ``sqlite3.Row`` rows and waits up to ``BUSY_TIMEOUT_SECONDS`` for the
+    write lock instead of failing immediately when another writer is active.
 
     Returns:
-        The shared ``sqlite3.Connection``.
+        The thread-local ``sqlite3.Connection``.
     """
-    global _conn
-    if _conn is None:
-        # Flask serves requests from multiple threads, so allow sharing.
-        _conn = sqlite3.connect(_path, check_same_thread=False)
-        _conn.row_factory = sqlite3.Row
-        _conn.executescript(SCHEMA)
-    return _conn
+    conn = getattr(_local, "conn", None)
+    if conn is not None and _local.path != _path:
+        close_conn()
+        conn = None
+    if conn is None:
+        _ensure_schema(_path)
+        conn = sqlite3.connect(_path, timeout=BUSY_TIMEOUT_SECONDS)
+        conn.row_factory = sqlite3.Row
+        _local.conn, _local.path = conn, _path
+    return conn
+
+
+def close_conn():
+    """Close and forget the calling thread's connection, if it has one."""
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        conn.close()
+        _local.conn = None

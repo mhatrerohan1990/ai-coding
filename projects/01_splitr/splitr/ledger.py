@@ -264,7 +264,9 @@ def balances(group_id):
     Computed on the fly from three tables: each expense credits its payer with
     the full amount, each share debits the member who owes it, and each
     settlement debits the payer (``from``) and credits the receiver (``to``).
-    Names not in the members table are added as they are encountered.
+    Names not in the members table are added as they are encountered. All
+    reads happen inside one read transaction, so the result is a consistent
+    snapshot even while other requests are writing.
 
     Returns:
         A ``{name: balance}`` dict with values rounded to 2 decimals.
@@ -274,25 +276,29 @@ def balances(group_id):
     """
     _require_group(group_id)
     conn = get_conn()
-    bal = {m["name"]: 0.0 for m in get_members(group_id)}
+    conn.execute("BEGIN")  # snapshot: one consistent view across the 3 queries
+    try:
+        bal = {m["name"]: 0.0 for m in get_members(group_id)}
 
-    for e in conn.execute(
-        "SELECT paid_by, amount FROM expenses WHERE group_id = ?", (group_id,)
-    ):
-        bal[e["paid_by"]] = bal.get(e["paid_by"], 0.0) + e["amount"]
+        for e in conn.execute(
+            "SELECT paid_by, amount FROM expenses WHERE group_id = ?", (group_id,)
+        ):
+            bal[e["paid_by"]] = bal.get(e["paid_by"], 0.0) + e["amount"]
 
-    for s in conn.execute(
-        "SELECT s.member, s.amount FROM shares s "
-        "JOIN expenses e ON e.id = s.expense_id WHERE e.group_id = ?",
-        (group_id,),
-    ):
-        bal[s["member"]] = bal.get(s["member"], 0.0) - s["amount"]
+        for s in conn.execute(
+            "SELECT s.member, s.amount FROM shares s "
+            "JOIN expenses e ON e.id = s.expense_id WHERE e.group_id = ?",
+            (group_id,),
+        ):
+            bal[s["member"]] = bal.get(s["member"], 0.0) - s["amount"]
 
-    for st in conn.execute(
-        "SELECT from_member, to_member, amount FROM settlements WHERE group_id = ?",
-        (group_id,),
-    ):
-        bal[st["from_member"]] = bal.get(st["from_member"], 0.0) - st["amount"]
-        bal[st["to_member"]] = bal.get(st["to_member"], 0.0) + st["amount"]
+        for st in conn.execute(
+            "SELECT from_member, to_member, amount FROM settlements WHERE group_id = ?",
+            (group_id,),
+        ):
+            bal[st["from_member"]] = bal.get(st["from_member"], 0.0) - st["amount"]
+            bal[st["to_member"]] = bal.get(st["to_member"], 0.0) + st["amount"]
+    finally:
+        conn.rollback()  # read-only: just end the snapshot
 
     return {name: round(v, 2) for name, v in bal.items()}

@@ -19,6 +19,11 @@ def create_app(db_path="splitr.db"):
     app = Flask(__name__)
     db.init(db_path)
 
+    @app.teardown_appcontext
+    def release_connection(exc):
+        """Close this thread's database connection when the request ends."""
+        db.close_conn()
+
     def _int_arg(name, default):
         """Read an integer query parameter, or raise ``ValidationError``."""
         raw = request.args.get(name)
