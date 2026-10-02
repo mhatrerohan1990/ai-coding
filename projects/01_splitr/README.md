@@ -55,7 +55,12 @@ From this folder, with the root venv activated (`source ../../.venv/bin/activate
 ```bash
 python -m pytest          # run the tests
 python run.py             # start the app at http://127.0.0.1:8080  (python run.py 8081 for another port)
+SPLITR_DEBUG=1 python run.py   # local development only: auto-reload + interactive debugger
 ```
+
+Debug mode is off by default: Flask's debugger lets anyone who can reach the port run code on the
+server, so never enable it anywhere reachable. `run.py` also uses Flask's development server; use a
+WSGI server (e.g. gunicorn) for real traffic.
 
 Example:
 
