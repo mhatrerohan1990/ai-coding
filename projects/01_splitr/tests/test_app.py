@@ -261,3 +261,45 @@ def test_settlement_validation(client, group_id, body):
 def test_non_object_json_body_returns_400(client, group_id, path):
     assert client.post(path, json=["not", "an", "object"]).status_code == 400
     assert client.post(path, json="name members").status_code == 400
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "sort=nonsense",
+        "sort=(SELECT%20name%20FROM%20groups)",
+        "sort=id;DROP%20TABLE%20expenses",
+        "page=abc",
+        "page=0",
+        "page=-1",
+        "limit=abc",
+        "limit=0",
+        "limit=-1",
+        "limit=101",
+    ],
+)
+def test_list_expenses_rejects_bad_query(client, group_id, query):
+    res = client.get(f"/groups/{group_id}/expenses?{query}")
+    assert res.status_code == 400
+
+
+def test_list_expenses_sort_injection_does_not_touch_tables(client, group_id):
+    client.get(f"/groups/{group_id}/expenses?sort=id;DROP%20TABLE%20expenses")
+    assert client.get(f"/groups/{group_id}/expenses").status_code == 200
+
+
+def test_list_expenses_sorts_by_allowed_column(client, group_id):
+    for amount in (10, 30, 20):
+        client.post(f"/groups/{group_id}/expenses", json={"paid_by": "alice", "amount": amount})
+    res = client.get(f"/groups/{group_id}/expenses?sort=amount")
+    assert [e["amount"] for e in res.get_json()["expenses"]] == [30, 20, 10]
+
+
+def test_list_expenses_ties_paginate_without_repeats(client, group_id):
+    for _ in range(5):
+        client.post(f"/groups/{group_id}/expenses", json={"paid_by": "alice", "amount": 10})
+    seen = []
+    for page in (1, 2, 3):
+        res = client.get(f"/groups/{group_id}/expenses?sort=amount&page={page}&limit=2")
+        seen += [e["id"] for e in res.get_json()["expenses"]]
+    assert sorted(seen) == [1, 2, 3, 4, 5]

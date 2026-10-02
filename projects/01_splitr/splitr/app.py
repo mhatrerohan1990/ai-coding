@@ -19,6 +19,16 @@ def create_app(db_path="splitr.db"):
     app = Flask(__name__)
     db.init(db_path)
 
+    def _int_arg(name, default):
+        """Read an integer query parameter, or raise ``ValidationError``."""
+        raw = request.args.get(name)
+        if raw is None:
+            return default
+        try:
+            return int(raw)
+        except ValueError:
+            raise ValidationError("%s must be an integer" % name)
+
     @app.errorhandler(ValidationError)
     def handle_validation_error(e):
         return jsonify(error=str(e)), 400
@@ -64,11 +74,13 @@ def create_app(db_path="splitr.db"):
     def list_expenses(group_id):
         """GET /groups/<id>/expenses: paginated list of a group's expenses.
 
-        Query params: ``page`` (default 1), ``limit`` (default 20) and ``sort``
-        (column name, default ``created_at``). Returns ``{"expenses": [...]}``.
+        Query params: ``page`` (default 1), ``limit`` (default 20, max 100) and
+        ``sort`` (one of ``ledger.SORTABLE_COLUMNS``, default ``created_at``).
+        Returns ``{"expenses": [...]}``; 400 for invalid params, 404 for an
+        unknown group.
         """
-        page = int(request.args.get("page", 1))
-        limit = int(request.args.get("limit", 20))
+        page = _int_arg("page", 1)
+        limit = _int_arg("limit", 20)
         sort = request.args.get("sort", "created_at")
         return jsonify(expenses=ledger.list_expenses(group_id, page, limit, sort))
 

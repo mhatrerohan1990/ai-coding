@@ -8,6 +8,10 @@ from .db import get_conn
 log = logging.getLogger(__name__)
 
 
+SORTABLE_COLUMNS = ("id", "paid_by", "amount", "description", "created_at")
+MAX_LIMIT = 100
+
+
 class ValidationError(ValueError):
     """The request data is invalid; the API maps this to HTTP 400."""
 
@@ -191,23 +195,35 @@ def add_expense(group_id, paid_by, amount, description="", split_among=None):
 def list_expenses(group_id, page=1, limit=20, sort="created_at"):
     """Return a page of a group's expenses, ordered by ``sort`` descending.
 
+    Ties are broken by ``id`` (also descending) so pages are stable and never
+    repeat or skip rows.
+
     Args:
         group_id: Group to list.
         page: 1-based page number; the OFFSET is ``(page - 1) * limit``.
-        limit: Page size.
-        sort: Column name to order by (interpolated into the SQL).
+        limit: Page size, between 1 and ``MAX_LIMIT``.
+        sort: Column to order by; must be one of ``SORTABLE_COLUMNS``.
 
     Returns:
         A list of dicts with id, paid_by, amount, description, created_at.
 
     Raises:
         GroupNotFound: If the group does not exist.
+        ValidationError: If ``sort`` is not an allowed column, ``page`` is not
+            an integer >= 1, or ``limit`` is not an integer in 1..``MAX_LIMIT``.
     """
+    if sort not in SORTABLE_COLUMNS:
+        raise ValidationError("sort must be one of: %s" % ", ".join(SORTABLE_COLUMNS))
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        raise ValidationError("page must be an integer >= 1")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
+        raise ValidationError("limit must be an integer between 1 and %d" % MAX_LIMIT)
     _require_group(group_id)
     offset = (page - 1) * limit
+    # ``sort`` is checked against the allowlist above, so interpolating it is safe.
     rows = get_conn().execute(
         f"SELECT id, paid_by, amount, description, created_at FROM expenses "
-        f"WHERE group_id = ? ORDER BY {sort} DESC LIMIT ? OFFSET ?",
+        f"WHERE group_id = ? ORDER BY {sort} DESC, id DESC LIMIT ? OFFSET ?",
         (group_id, limit, offset),
     ).fetchall()
     return [dict(r) for r in rows]
