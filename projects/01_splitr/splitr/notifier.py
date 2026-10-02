@@ -31,25 +31,25 @@ def send_email(to, subject, body):
 def notify_expense(members, paid_by, amount, description, shares):
     """Email every member who has a share in a new expense.
 
-    Members not in ``shares`` are skipped. Emails are sent one at a time, in
+    Members whose id is not in ``shares`` are skipped. Emails are sent one at a time, in
     order. A failure for one recipient (e.g. a missing or invalid address) is
     logged and does not stop the remaining recipients from being notified.
 
     Args:
-        members: List of ``{"name", "email"}`` dicts for the whole group.
-        paid_by: Name of the payer (shown in the body).
+        members: List of ``{"id", "name", "email"}`` dicts for the whole group.
+        paid_by: Display name of the payer (shown in the body).
         amount: Total expense amount.
         description: Expense label; "untitled" is used when empty.
-        shares: ``{name: share}`` mapping from ``split_evenly``.
+        shares: ``{user_id: share}`` mapping from ``split_evenly``.
     """
     for m in members:
-        if m["name"] not in shares:
+        if m["id"] not in shares:
             continue
         try:
             send_email(
                 m["email"],
                 "New expense: %s" % (description or "untitled"),
-                "%s paid %.2f. Your share is %.2f." % (paid_by, amount, shares[m["name"]]),
+                "%s paid %.2f. Your share is %.2f." % (paid_by, amount, shares[m["id"]]),
             )
         except Exception:
             log.exception("could not notify %s about expense", m["name"])

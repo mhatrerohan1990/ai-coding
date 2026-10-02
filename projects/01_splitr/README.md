@@ -39,11 +39,14 @@ Aim for **60 minutes**. Write your start time in `NOTES.md` before you begin.
 
 | Method | Path | Body / query | Purpose |
 |---|---|---|---|
-| POST | `/groups` | `{"name", "members": [{"name", "email"}]}` | create a group |
-| POST | `/groups/<id>/expenses` | `{"paid_by", "amount", "description"?, "split_among"?}` | log an expense (split evenly among `split_among`, or the whole group if omitted) |
-| GET | `/groups/<id>/expenses` | `?page=1&limit=20&sort=created_at` | list expenses |
-| GET | `/groups/<id>/balances` | | net balance per member (positive = owed money) |
-| POST | `/groups/<id>/settlements` | `{"from", "to", "amount"}` | record that `from` paid `to` back |
+| POST | `/users` | `{"name", "email"?}` | create a user (returns a UUID `id`) |
+| GET | `/users/<id>` | | fetch a user |
+| PATCH | `/users/<id>` | `{"name"?, "email"?}` | rename / change email (history is unaffected) |
+| POST | `/groups` | `{"name", "members": [<user_id>, ...]}` | create a group from existing users |
+| POST | `/groups/<id>/expenses` | `{"paid_by", "amount", "description"?, "split_among"?}` | log an expense (split evenly among `split_among`, or the whole group if omitted); `paid_by` / `split_among` are user ids |
+| GET | `/groups/<id>/expenses` | `?page=1&limit=20&sort=created_at` | list expenses (`limit` max 100; `sort` one of id, amount, description, created_at) |
+| GET | `/groups/<id>/balances` | | net balance per member, keyed by user id (positive = owed money) |
+| POST | `/groups/<id>/settlements` | `{"from", "to", "amount"}` | record that user `from` paid user `to` back |
 
 ## Running it
 
@@ -57,9 +60,13 @@ python run.py             # start the app at http://127.0.0.1:8080  (python run.
 Example:
 
 ```bash
-curl -s -XPOST localhost:8080/groups -H 'content-type: application/json' \
-  -d '{"name":"trip","members":[{"name":"alice","email":"alice@example.com"},{"name":"bob","email":"bob@example.com"}]}'
-curl -s -XPOST localhost:8080/groups/1/expenses -H 'content-type: application/json' \
-  -d '{"paid_by":"alice","amount":40,"description":"dinner"}'
+H='content-type: application/json'
+A=$(curl -s -XPOST localhost:8080/users -H "$H" -d '{"name":"alice","email":"alice@example.com"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+B=$(curl -s -XPOST localhost:8080/users -H "$H" -d '{"name":"bob","email":"bob@example.com"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -XPOST localhost:8080/groups -H "$H" -d "{\"name\":\"trip\",\"members\":[\"$A\",\"$B\"]}"
+curl -s -XPOST localhost:8080/groups/1/expenses -H "$H" -d "{\"paid_by\":\"$A\",\"amount\":40,\"description\":\"dinner\"}"
 curl -s localhost:8080/groups/1/balances
 ```
+
+If you have a `splitr.db` from an older version, delete it: the schema changed (users, group_members)
+and the app refuses to open an old-layout database.

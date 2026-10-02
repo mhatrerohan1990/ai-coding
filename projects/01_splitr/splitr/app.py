@@ -1,7 +1,7 @@
 from flask import Flask, jsonify, request
 
 from . import db, ledger
-from .ledger import GroupNotFound, ValidationError
+from .ledger import NotFound, ValidationError
 
 
 def create_app(db_path="splitr.db"):
@@ -38,16 +38,47 @@ def create_app(db_path="splitr.db"):
     def handle_validation_error(e):
         return jsonify(error=str(e)), 400
 
-    @app.errorhandler(GroupNotFound)
-    def handle_group_not_found(e):
+    @app.errorhandler(NotFound)
+    def handle_not_found(e):
         return jsonify(error=str(e)), 404
+
+    @app.post("/users")
+    def create_user():
+        """POST /users: create a user.
+
+        Body: ``{"name": str, "email"?: str}``. Returns ``{"id": <uuid>}`` with
+        201, or 400 if the name is missing or a value is invalid.
+        """
+        data = request.get_json()
+        if not isinstance(data, dict) or "name" not in data:
+            return jsonify(error="name is required"), 400
+        return jsonify(id=ledger.create_user(data["name"], data.get("email"))), 201
+
+    @app.get("/users/<user_id>")
+    def get_user(user_id):
+        """GET /users/<id>: return ``{"id", "name", "email"}``, or 404."""
+        return jsonify(ledger.get_user(user_id))
+
+    @app.patch("/users/<user_id>")
+    def update_user(user_id):
+        """PATCH /users/<id>: change the user's ``name`` and/or ``email``.
+
+        Returns the updated user, 400 for invalid or empty updates, or 404 if the
+        user does not exist. Group history is unaffected because everything
+        references the user's id.
+        """
+        data = request.get_json()
+        if not isinstance(data, dict):
+            return jsonify(error="a JSON object is required"), 400
+        return jsonify(ledger.update_user(user_id, **data))
 
     @app.post("/groups")
     def create_group():
-        """POST /groups: create a group with its members.
+        """POST /groups: create a group from existing users.
 
-        Body: ``{"name": str, "members": [{"name": str, "email": str}]}``.
-        Returns ``{"id": <group_id>}`` with 201, 400 if name/members are missing or invalid.
+        Body: ``{"name": str, "members": [<user_id>, ...]}``. Returns
+        ``{"id": <group_id>}`` with 201, or 400 if name/members are missing,
+        invalid, or reference unknown users.
         """
         data = request.get_json()
         if not isinstance(data, dict) or "name" not in data or "members" not in data:
@@ -59,9 +90,10 @@ def create_app(db_path="splitr.db"):
     def add_expense(group_id):
         """POST /groups/<id>/expenses: log an expense and split it.
 
-        Body: ``{"paid_by", "amount", "description"?, "split_among"?}``.
-        Only those known keys are forwarded to ``ledger.add_expense``. Returns
-        ``{"id": <expense_id>, "shares": {member: amount}}`` with 201, 400 if the
+        Body: ``{"paid_by", "amount", "description"?, "split_among"?}`` where
+        ``paid_by`` and ``split_among`` use user ids. Only those known keys are
+        forwarded to ``ledger.add_expense``. Returns
+        ``{"id": <expense_id>, "shares": {user_id: amount}}`` with 201, 400 if the
         input is missing or invalid, or 404 if the group does not exist.
         """
         data = request.get_json()
@@ -93,8 +125,8 @@ def create_app(db_path="splitr.db"):
     def balances(group_id):
         """GET /groups/<id>/balances: net balance per member.
 
-        Returns ``{"balances": {name: amount}}``; positive means the member is
-        owed money, negative means they owe.
+        Returns ``{"balances": {user_id: {"name", "balance"}}}``; a positive
+        balance means the member is owed money, negative means they owe.
         """
         return jsonify(balances=ledger.balances(group_id))
 
@@ -102,9 +134,9 @@ def create_app(db_path="splitr.db"):
     def settle(group_id):
         """POST /groups/<id>/settlements: record that one member paid another.
 
-        Body: ``{"from": str, "to": str, "amount": number}``. Returns
-        ``{"id": <settlement_id>}`` with 201, 400 if a field is missing or invalid, or 404 if the group does not
-        exist.
+        Body: ``{"from": <user_id>, "to": <user_id>, "amount": number}``.
+        Returns ``{"id": <settlement_id>}`` with 201, 400 if a field is missing or
+        invalid, or 404 if the group does not exist.
         """
         data = request.get_json()
         if not isinstance(data, dict) or not all(k in data for k in ("from", "to", "amount")):
