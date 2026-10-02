@@ -61,7 +61,7 @@ def split_evenly(amount, people):
     return {p: share for p in people}
 
 
-def add_expense(group_id, paid_by, amount, description="", split_among=[]):
+def add_expense(group_id, paid_by, amount, description="", split_among=None):
     """Record an expense, split it, and notify the participants.
 
     If ``split_among`` is empty the expense is split across every member of the
@@ -75,14 +75,15 @@ def add_expense(group_id, paid_by, amount, description="", split_among=[]):
         paid_by: Name of the member who paid.
         amount: Total amount paid.
         description: Free-text label (used in the email subject).
-        split_among: Names that share the cost; empty means the whole group.
+        split_among: Names that share the cost; ``None`` or empty means the
+            whole group. The caller's list is never mutated.
 
     Returns:
         ``(expense_id, shares)`` where ``shares`` is ``{name: amount}``.
     """
     members = get_members(group_id)
     if not split_among:
-        split_among.extend(m["name"] for m in members)
+        split_among = [m["name"] for m in members]
 
     shares = split_evenly(amount, split_among)
 

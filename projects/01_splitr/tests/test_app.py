@@ -151,3 +151,23 @@ def test_failed_notification_does_not_lose_expense(client, group_id, monkeypatch
     assert res.status_code == 201
     assert _count("expenses") == 1
     assert _count("shares") == 3
+
+
+def test_default_split_does_not_leak_between_groups(client):
+    a = client.post(
+        "/groups",
+        json={"name": "A", "members": [{"name": "amy", "email": "amy@x.com"},
+                                       {"name": "ann", "email": "ann@x.com"}]},
+    ).get_json()["id"]
+    b = client.post(
+        "/groups",
+        json={"name": "B", "members": [{"name": "bob", "email": "bob@x.com"},
+                                       {"name": "bea", "email": "bea@x.com"}]},
+    ).get_json()["id"]
+
+    client.post(f"/groups/{a}/expenses", json={"paid_by": "amy", "amount": 10})
+    res = client.post(f"/groups/{b}/expenses", json={"paid_by": "bob", "amount": 10})
+
+    assert res.get_json()["shares"] == {"bob": 5, "bea": 5}
+    assert client.get(f"/groups/{a}/balances").get_json()["balances"] == {"amy": 5, "ann": -5}
+    assert client.get(f"/groups/{b}/balances").get_json()["balances"] == {"bob": 5, "bea": -5}
