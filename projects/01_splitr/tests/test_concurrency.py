@@ -19,8 +19,8 @@ def test_threads_do_not_share_transactions(client, ids, group_id):
             conn = get_conn()
             conn.execute(
                 "INSERT INTO settlements "
-                "(group_id, from_user_id, to_user_id, amount, created_at) "
-                "VALUES (?, ?, ?, 5, 'now')",
+                "(group_id, from_user_id, to_user_id, amount_cents, created_at) "
+                "VALUES (?, ?, ?, 500, 'now')",
                 (group_id, ids["bob"], ids["alice"]),
             )
             a_inserted.set()
@@ -81,7 +81,7 @@ def test_concurrent_requests_stay_consistent(tmp_path):
             while not done.is_set():
                 with app.app_context():
                     balances = balance_service.get_balances(gid)
-                    sums.append(round(sum(b.balance for b in balances), 2))
+                    sums.append(sum(b.balance_cents for b in balances))
         except Exception as e:
             errors.append(e)
 

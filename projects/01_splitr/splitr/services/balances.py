@@ -15,7 +15,7 @@ def get_balances(group_id):
     are writing.
 
     Returns:
-        A list of ``Balance`` objects (one per member), rounded to 2 decimals.
+        A list of ``Balance`` objects (one per member), in integer cents.
 
     Raises:
         GroupNotFound: If the group does not exist.
@@ -24,14 +24,14 @@ def get_balances(group_id):
     with db.read_snapshot():
         members = groups_service.get_members(group_id)
         names = {m.id: m.name for m in members}
-        bal = {m.id: 0.0 for m in members}
+        bal = {m.id: 0 for m in members}
 
-        for user_id, amount in expenses_repo.paid_amounts(group_id):
-            bal[user_id] = bal.get(user_id, 0.0) + amount
-        for user_id, amount in expenses_repo.share_amounts(group_id):
-            bal[user_id] = bal.get(user_id, 0.0) - amount
+        for user_id, cents in expenses_repo.paid_amounts(group_id):
+            bal[user_id] = bal.get(user_id, 0) + cents
+        for user_id, cents in expenses_repo.share_amounts(group_id):
+            bal[user_id] = bal.get(user_id, 0) - cents
         for s in settlements_repo.list_for_group(group_id):
-            bal[s.from_user_id] = bal.get(s.from_user_id, 0.0) + s.amount
-            bal[s.to_user_id] = bal.get(s.to_user_id, 0.0) - s.amount
+            bal[s.from_user_id] = bal.get(s.from_user_id, 0) + s.amount_cents
+            bal[s.to_user_id] = bal.get(s.to_user_id, 0) - s.amount_cents
 
-    return [Balance(uid, names.get(uid), round(v, 2)) for uid, v in bal.items()]
+    return [Balance(uid, names.get(uid), cents) for uid, cents in bal.items()]

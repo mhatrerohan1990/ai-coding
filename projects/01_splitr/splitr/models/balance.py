@@ -8,4 +8,4 @@ class Balance:
 
     user_id: str
     name: Optional[str]
-    balance: float
+    balance_cents: int

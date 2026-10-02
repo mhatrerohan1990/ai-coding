@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify
 
+from .. import money
 from ..services import balances as balances_service
 from ..services import groups as groups_service
 from ..services import settle_up as settle_up_service
@@ -31,7 +32,10 @@ def balances(group_id):
     """
     result = balances_service.get_balances(group_id)
     return jsonify(
-        balances={b.user_id: {"name": b.name, "balance": b.balance} for b in result}
+        balances={
+            b.user_id: {"name": b.name, "balance": money.to_amount(b.balance_cents)}
+            for b in result
+        }
     )
 
 
@@ -52,7 +56,7 @@ def settle_up(group_id):
                 "from_name": p.from_name,
                 "to": p.to_user_id,
                 "to_name": p.to_name,
-                "amount": p.amount,
+                "amount": money.to_amount(p.amount_cents),
             }
             for p in payments
         ]

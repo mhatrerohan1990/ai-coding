@@ -9,7 +9,7 @@ class Expense:
     id: Optional[int]
     group_id: int
     paid_by: str  # user id of the payer
-    amount: float
+    amount_cents: int
     description: Optional[str]
     created_at: str
 
@@ -20,4 +20,4 @@ class Share:
 
     expense_id: int
     user_id: str
-    amount: float
+    amount_cents: int

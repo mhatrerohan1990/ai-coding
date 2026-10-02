@@ -59,8 +59,8 @@ def get_settle_up(group_id):
     """
     balances = balances_service.get_balances(group_id)
     names = {b.user_id: b.name for b in balances}
-    cents = {b.user_id: round(b.balance * 100) for b in balances}
+    cents = {b.user_id: b.balance_cents for b in balances}
     return [
-        Payment(debtor, names[debtor], creditor, names[creditor], amount / 100)
+        Payment(debtor, names[debtor], creditor, names[creditor], amount)
         for debtor, creditor, amount in simplify_debts(cents)
     ]

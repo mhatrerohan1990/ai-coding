@@ -6,12 +6,12 @@ from .helpers import balances_by_name
 def test_split_evenly_distributes_remainder_cents():
     from splitr.services.expenses import split_evenly
 
-    shares = split_evenly(100, ["a", "b", "c"])
-    assert shares == {"a": 33.34, "b": 33.33, "c": 33.33}
-    assert round(sum(shares.values()), 2) == 100
+    shares = split_evenly(10000, ["a", "b", "c"])  # 100.00 among three
+    assert shares == {"a": 3334, "b": 3333, "c": 3333}
+    assert sum(shares.values()) == 10000
 
-    assert split_evenly(0.01, ["a", "b", "c"]) == {"a": 0.01, "b": 0.0, "c": 0.0}
-    assert split_evenly(90, ["a", "b", "c"]) == {"a": 30, "b": 30, "c": 30}
+    assert split_evenly(1, ["a", "b", "c"]) == {"a": 1, "b": 0, "c": 0}  # one cent
+    assert split_evenly(9000, ["a", "b", "c"]) == {"a": 3000, "b": 3000, "c": 3000}
 
 
 def test_uneven_split_balances_net_to_zero(client, ids, group_id):

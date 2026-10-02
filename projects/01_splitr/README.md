@@ -65,6 +65,13 @@ curl -s -XPOST localhost:8080/groups/1/expenses -H "$H" -H 'Idempotency-Key: 7c1
 - Keys are remembered for 24 hours. Without the header, a retry creates a duplicate.
 - Timestamps (`created_at`) are ISO 8601 in UTC, e.g. `2026-10-02T12:00:00.123456+00:00`.
 
+## Money
+
+Amounts in requests and responses are plain decimal numbers (`33.34`) with at most 2 decimal places, greater
+than 0 and at most 1,000,000,000. Internally everything is **integer cents** (stored as `amount_cents`, with
+`CHECK` constraints), so splits and balances are exact: an expense split three ways, e.g. 100.00 ->
+33.34 + 33.33 + 33.33, always sums back to the total and group balances always net to exactly zero.
+
 ## Tests
 
 `tests/` has one module per concern, with shared fixtures in `conftest.py` and plain helpers in `helpers.py`:
@@ -92,6 +99,7 @@ splitr/
   errors.py        ValidationError (400), NotFound (404), Conflict (409)
   clock.py         the single source of (UTC) time
   validation.py    shared input validators
+  money.py         amount <-> integer cents (the only place that touches decimals)
 ```
 
 Dependencies point one way: controllers -> services -> repositories -> db, and models import
@@ -124,4 +132,6 @@ curl -s localhost:8080/groups/1/balances
 ```
 
 If you have a `splitr.db` from the original (name-based) version, delete it: the app refuses to open that
-layout. A database from the users/group_members version is upgraded in place.
+layout. A database from the users/group_members versions (schema 2 or 3, float amounts) is upgraded
+in place on first start: amounts are converted to integer cents in one transaction, and nothing changes if
+the upgrade fails. Back up `splitr.db` first if it holds data you care about.

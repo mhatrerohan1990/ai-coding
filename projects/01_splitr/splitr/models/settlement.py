@@ -10,5 +10,5 @@ class Settlement:
     group_id: int
     from_user_id: str
     to_user_id: str
-    amount: float
+    amount_cents: int
     created_at: str

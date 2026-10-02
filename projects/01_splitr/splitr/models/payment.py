@@ -10,4 +10,4 @@ class Payment:
     from_name: Optional[str]
     to_user_id: str
     to_name: Optional[str]
-    amount: float
+    amount_cents: int

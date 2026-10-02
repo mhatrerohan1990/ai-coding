@@ -11,12 +11,41 @@ _schema_lock = threading.Lock()
 _schema_ready = set()  # database paths whose schema has been created
 BUSY_TIMEOUT_SECONDS = 10
 
-SCHEMA_VERSION = 3
-# Older versions whose tables are a subset of the current schema: opening one just
-# adds the missing tables (CREATE TABLE IF NOT EXISTS) and bumps the version.
-UPGRADABLE_FROM = (2,)
+SCHEMA_VERSION = 4
+# Older versions that are upgraded in place when opened. They have the same tables
+# but store money as floating-point ``amount`` columns (and may lack newer tables):
+# the money columns are rebuilt as integer cents and the rest is added by SCHEMA.
+UPGRADABLE_FROM = (2, 3)
 
-SCHEMA = """
+# Column definitions of the tables that hold money, shared by SCHEMA and the
+# migration so the two can never drift apart.
+_EXPENSES_COLUMNS = """(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES groups(id),
+    paid_by TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+    description TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (group_id, paid_by) REFERENCES group_members(group_id, user_id)
+)"""
+_SHARES_COLUMNS = """(
+    expense_id INTEGER NOT NULL REFERENCES expenses(id),
+    user_id TEXT NOT NULL REFERENCES users(id),
+    amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
+    PRIMARY KEY (expense_id, user_id)
+)"""
+_SETTLEMENTS_COLUMNS = """(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES groups(id),
+    from_user_id TEXT NOT NULL,
+    to_user_id TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (group_id, from_user_id) REFERENCES group_members(group_id, user_id),
+    FOREIGN KEY (group_id, to_user_id) REFERENCES group_members(group_id, user_id)
+)"""
+
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -34,33 +63,11 @@ CREATE TABLE IF NOT EXISTS group_members (
     PRIMARY KEY (group_id, user_id)
 );
 
-CREATE TABLE IF NOT EXISTS expenses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL REFERENCES groups(id),
-    paid_by TEXT NOT NULL,
-    amount REAL NOT NULL,
-    description TEXT,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (group_id, paid_by) REFERENCES group_members(group_id, user_id)
-);
+CREATE TABLE IF NOT EXISTS expenses {_EXPENSES_COLUMNS};
 
-CREATE TABLE IF NOT EXISTS shares (
-    expense_id INTEGER NOT NULL REFERENCES expenses(id),
-    user_id TEXT NOT NULL REFERENCES users(id),
-    amount REAL NOT NULL,
-    PRIMARY KEY (expense_id, user_id)
-);
+CREATE TABLE IF NOT EXISTS shares {_SHARES_COLUMNS};
 
-CREATE TABLE IF NOT EXISTS settlements (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL REFERENCES groups(id),
-    from_user_id TEXT NOT NULL,
-    to_user_id TEXT NOT NULL,
-    amount REAL NOT NULL,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (group_id, from_user_id) REFERENCES group_members(group_id, user_id),
-    FOREIGN KEY (group_id, to_user_id) REFERENCES group_members(group_id, user_id)
-);
+CREATE TABLE IF NOT EXISTS settlements {_SETTLEMENTS_COLUMNS};
 
 CREATE TABLE IF NOT EXISTS idempotency_keys (
     key TEXT PRIMARY KEY,
@@ -77,15 +84,46 @@ CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
 """
 
 
+def _migrate_floats_to_cents():
+    """SQL that rebuilds the money tables with integer-cent columns, in one transaction.
+
+    Each ``amount`` REAL (e.g. 33.34) becomes ``amount_cents`` INTEGER (3334),
+    rounded so float noise like 3334.0000000000005 cannot survive. SQLite cannot
+    change a column's type in place, so each table is copied into a new one.
+    """
+    rebuilds = [
+        ("expenses", _EXPENSES_COLUMNS,
+         "id, group_id, paid_by, amount_cents, description, created_at",
+         "id, group_id, paid_by, CAST(ROUND(amount * 100) AS INTEGER), description, created_at"),
+        ("shares", _SHARES_COLUMNS,
+         "expense_id, user_id, amount_cents",
+         "expense_id, user_id, CAST(ROUND(amount * 100) AS INTEGER)"),
+        ("settlements", _SETTLEMENTS_COLUMNS,
+         "id, group_id, from_user_id, to_user_id, amount_cents, created_at",
+         "id, group_id, from_user_id, to_user_id, CAST(ROUND(amount * 100) AS INTEGER), created_at"),
+    ]
+    statements = ["BEGIN"]
+    for table, columns, new_cols, old_cols in rebuilds:
+        statements += [
+            "CREATE TABLE %s_new %s" % (table, columns),
+            "INSERT INTO %s_new (%s) SELECT %s FROM %s" % (table, new_cols, old_cols, table),
+            "DROP TABLE %s" % table,
+            "ALTER TABLE %s_new RENAME TO %s" % (table, table),
+        ]
+    statements += ["PRAGMA user_version = %d" % SCHEMA_VERSION, "COMMIT"]
+    return ";\n".join(statements) + ";"
+
+
 def _ensure_schema(path):
-    """Create the tables (and switch to WAL) once per database path.
+    """Create or upgrade the schema (and switch to WAL) once per database path.
 
     The schema version is stored in ``PRAGMA user_version``. Versions listed in
-    ``UPGRADABLE_FROM`` only lack newer tables and are upgraded in place; any
-    other older layout is refused rather than silently mixed with the new one.
+    ``UPGRADABLE_FROM`` are upgraded in place, converting stored money from
+    floats to integer cents inside one transaction (all or nothing); any other
+    older layout is refused rather than silently mixed with the new one.
 
     Raises:
-        RuntimeError: If ``path`` holds a database with an older schema.
+        RuntimeError: If ``path`` holds a database with an unsupported old schema.
     """
     with _schema_lock:
         if path in _schema_ready:
@@ -103,7 +141,10 @@ def _ensure_schema(path):
                 )
             # WAL lets readers run alongside the single writer.
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.executescript(SCHEMA)
+            if has_tables and version in UPGRADABLE_FROM:
+                log.info("upgrading %s from schema %s to %s", path, version, SCHEMA_VERSION)
+                conn.executescript(_migrate_floats_to_cents())
+            conn.executescript(SCHEMA)  # missing tables and indexes
             conn.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
         finally:
             conn.close()

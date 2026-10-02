@@ -1,23 +1,11 @@
 """Input validators shared by the services. They raise ``ValidationError``."""
 
-import math
-
 from .errors import ValidationError
 
 
 def is_name(value):
     """True for a non-blank string."""
     return isinstance(value, str) and bool(value.strip())
-
-
-def validate_amount(amount):
-    """Require a finite positive number with at most 2 decimal places."""
-    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
-        raise ValidationError("amount must be a number")
-    if not math.isfinite(amount) or amount <= 0:
-        raise ValidationError("amount must be greater than 0")
-    if abs(amount * 100 - round(amount * 100)) > 1e-6:
-        raise ValidationError("amount must have at most 2 decimal places")
 
 
 def validate_user_fields(fields):

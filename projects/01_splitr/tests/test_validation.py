@@ -31,6 +31,8 @@ def test_create_group_validation(client, ids, body):
         {"paid_by": "alice", "amount": "abc"},
         {"paid_by": "alice", "amount": True},
         {"paid_by": "alice", "amount": 10.005},
+        {"paid_by": "alice", "amount": 1_000_000_001},
+        {"paid_by": "alice", "amount": 1e30},
         {"paid_by": "ghost", "amount": 10},
         {"paid_by": ["alice"], "amount": 10},
         {"paid_by": "alice", "amount": 10, "split_among": ["ghost"]},
@@ -79,6 +81,7 @@ def test_missing_group_returns_404(client):
         {"from": "bob", "to": "alice", "amount": -5},
         {"from": "bob", "to": "alice", "amount": 0},
         {"from": "bob", "to": "alice", "amount": "5"},
+        {"from": "bob", "to": "alice", "amount": 1e30},
     ],
 )
 def test_settlement_validation(client, ids, group_id, body):

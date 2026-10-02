@@ -1,4 +1,4 @@
-from .. import clock, db, validation
+from .. import clock, db, money
 from ..errors import ValidationError
 from ..models import Settlement
 from ..repositories import settlements as settlements_repo
@@ -30,8 +30,8 @@ def record_settlement(group_id, from_user, to_user, amount):
             raise ValidationError("from and to must be user ids of group members")
     if from_user == to_user:
         raise ValidationError("from and to must be different members")
-    validation.validate_amount(amount)
+    amount_cents = money.parse_amount(amount)
     with db.transaction():
         return settlements_repo.insert(
-            Settlement(None, group_id, from_user, to_user, amount, clock.utc_now_iso())
+            Settlement(None, group_id, from_user, to_user, amount_cents, clock.utc_now_iso())
         )

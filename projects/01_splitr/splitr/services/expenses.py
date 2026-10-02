@@ -1,7 +1,7 @@
 import logging
 from dataclasses import asdict
 
-from .. import clock, db, notifier, validation
+from .. import clock, db, money, notifier, validation
 from ..errors import ValidationError
 from ..models import Expense, Share
 from ..repositories import expenses as expenses_repo
@@ -13,26 +13,22 @@ SORTABLE_COLUMNS = expenses_repo.SORTABLE_COLUMNS
 MAX_LIMIT = 100
 
 
-def split_evenly(amount, people):
-    """Divide ``amount`` between ``people`` without losing or inventing cents.
+def split_evenly(total_cents, people):
+    """Divide ``total_cents`` between ``people`` without losing or inventing a cent.
 
-    Works in integer cents: every person gets ``total_cents // n`` and the
-    leftover cents (fewer than ``n``) are handed out one each to the first
-    people in the sequence. Shares therefore always sum exactly to ``amount``
-    (e.g. 100 among 3 -> 33.34, 33.33, 33.33).
+    Every person gets ``total_cents // n`` and the leftover cents (fewer than
+    ``n``) are handed out one each to the first people in the sequence, so the
+    shares always sum exactly to the total (e.g. 10000 among 3 -> 3334, 3333, 3333).
 
     Args:
-        amount: Total amount to split.
+        total_cents: Total to split, in cents.
         people: Sequence of user ids.
 
     Returns:
-        A ``{user_id: share}`` dict whose values sum to ``amount``.
+        A ``{user_id: share_in_cents}`` dict whose values sum to ``total_cents``.
     """
-    cents = round(amount * 100)
-    base, remainder = divmod(cents, len(people))
-    return {
-        p: (base + (1 if i < remainder else 0)) / 100 for i, p in enumerate(people)
-    }
+    base, remainder = divmod(total_cents, len(people))
+    return {p: base + (1 if i < remainder else 0) for i, p in enumerate(people)}
 
 
 def add_expense(group_id, paid_by, amount, description="", split_among=None):
@@ -47,13 +43,14 @@ def add_expense(group_id, paid_by, amount, description="", split_among=None):
     Args:
         group_id: Group the expense belongs to.
         paid_by: User id of the member who paid.
-        amount: Total amount paid.
+        amount: Total amount paid, a number with at most 2 decimals (see
+            ``money.parse_amount``); it is converted to integer cents at once.
         description: Free-text label (used in the email subject).
         split_among: User ids that share the cost; ``None`` or empty means the
             whole group. The caller's list is never mutated.
 
     Returns:
-        ``(expense, shares)``: the saved ``Expense`` and ``{user_id: amount}``.
+        ``(expense, shares)``: the saved ``Expense`` and ``{user_id: cents}``.
 
     Raises:
         GroupNotFound: If the group does not exist.
@@ -64,7 +61,7 @@ def add_expense(group_id, paid_by, amount, description="", split_among=None):
     groups_service.require_group(group_id)
     members = groups_service.get_members(group_id)
     member_ids = {m.id for m in members}
-    validation.validate_amount(amount)
+    amount_cents = money.parse_amount(amount)
     if not isinstance(paid_by, str) or paid_by not in member_ids:
         raise ValidationError("paid_by must be the user id of a group member")
     if description is not None and not isinstance(description, str):
@@ -77,14 +74,14 @@ def add_expense(group_id, paid_by, amount, description="", split_among=None):
         if unknown:
             raise ValidationError("split_among has non-members: %s" % unknown)
 
-    shares = split_evenly(amount, split_among)
+    shares = split_evenly(amount_cents, split_among)
 
     with db.transaction():  # expense + shares commit together or not at all
         expense = expenses_repo.insert(
-            Expense(None, group_id, paid_by, amount, description, clock.utc_now_iso())
+            Expense(None, group_id, paid_by, amount_cents, description, clock.utc_now_iso())
         )
         expenses_repo.insert_shares(
-            [Share(expense.id, user_id, share) for user_id, share in shares.items()]
+            [Share(expense.id, user_id, cents) for user_id, cents in shares.items()]
         )
 
     # Notify only after the data is durably committed (after the *outermost*
@@ -95,7 +92,11 @@ def add_expense(group_id, paid_by, amount, description="", split_among=None):
         try:
             payer_name = next(m.name for m in members if m.id == paid_by)
             notifier.notify_expense_async(
-                [asdict(m) for m in members], payer_name, amount, description, shares
+                [asdict(m) for m in members],
+                payer_name,
+                money.to_amount(amount_cents),
+                description,
+                {user_id: money.to_amount(c) for user_id, c in shares.items()},
             )
         except Exception:
             log.exception("expense %s saved but notification was not queued", expense.id)
