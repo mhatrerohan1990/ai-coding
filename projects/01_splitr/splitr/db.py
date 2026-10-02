@@ -1,5 +1,6 @@
 import sqlite3
 import threading
+from contextlib import contextmanager
 
 _path = "splitr.db"
 _local = threading.local()  # one connection (and transaction state) per thread
@@ -145,3 +146,36 @@ def close_conn():
     if conn is not None:
         conn.close()
         _local.conn = None
+
+
+@contextmanager
+def transaction():
+    """Run a block as one atomic unit: commit on success, roll back on any error.
+
+    Services use this to group several repository writes (e.g. an expense and
+    its shares) so they are saved together or not at all.
+
+    Yields:
+        The thread's ``sqlite3.Connection``.
+    """
+    conn = get_conn()
+    with conn:
+        yield conn
+
+
+@contextmanager
+def read_snapshot():
+    """Run several reads against one consistent snapshot of the database.
+
+    Opens a read transaction and always ends it (nothing is written), so writes
+    committed by other requests while the block runs are not seen half-way.
+
+    Yields:
+        The thread's ``sqlite3.Connection``.
+    """
+    conn = get_conn()
+    conn.execute("BEGIN")
+    try:
+        yield conn
+    finally:
+        conn.rollback()

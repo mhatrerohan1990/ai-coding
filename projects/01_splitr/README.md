@@ -48,6 +48,25 @@ Aim for **60 minutes**. Write your start time in `NOTES.md` before you begin.
 | GET | `/groups/<id>/balances` | | net balance per member, keyed by user id (positive = owed money) |
 | POST | `/groups/<id>/settlements` | `{"from", "to", "amount"}` | record that user `from` paid user `to` back |
 
+## Architecture
+
+```
+splitr/
+  app.py           create_app(): wires the layers together
+  controllers/     HTTP only: Flask blueprints parse requests, call services, shape JSON
+  services/        business rules, validation, transaction boundaries (no Flask, no SQL)
+  repositories/    all SQL; returns model objects, never commits
+  models/          plain frozen dataclasses: User, Group, Expense, Share, Settlement, Balance
+  db.py            per-thread connections, db.transaction(), db.read_snapshot()
+  notifier.py      email adapter + background queue
+  errors.py        ValidationError (400), NotFound (404)
+  validation.py    shared input validators
+```
+
+Dependencies point one way: controllers -> services -> repositories -> db, and models import
+nothing from the app. `tests/test_app.py` enforces this (e.g. no SQL in services or controllers,
+no Flask in services).
+
 ## Running it
 
 From this folder, with the root venv activated (`source ../../.venv/bin/activate`):

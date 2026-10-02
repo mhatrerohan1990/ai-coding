@@ -268,11 +268,11 @@ def test_record_settlement(client, ids, group_id):
 
 
 def test_create_group_is_atomic(client, ids, monkeypatch):
-    from splitr import ledger
+    from splitr.services import users as users_service
 
     # Skip the up-front user check so an unknown member fails mid-transaction
     # (foreign key), after the group row has been inserted.
-    monkeypatch.setattr(ledger, "_require_users", lambda user_ids: None)
+    monkeypatch.setattr(users_service, "require_users", lambda user_ids: None)
     res = client.post(
         "/groups", json={"name": "bad", "members": [ids["alice"], "no-such-user"]}
     )
@@ -282,11 +282,11 @@ def test_create_group_is_atomic(client, ids, monkeypatch):
 
 
 def test_add_expense_is_atomic(client, ids, group_id, monkeypatch):
-    from splitr import ledger
+    from splitr.services import expenses as expense_service
 
     # The second share can't be bound by sqlite, so it fails mid-transaction.
     monkeypatch.setattr(
-        ledger,
+        expense_service,
         "split_evenly",
         lambda amount, people: {ids["alice"]: 10, ids["bob"]: object()},
     )
@@ -334,7 +334,7 @@ def test_default_split_does_not_leak_between_groups(client):
 
 
 def test_split_evenly_distributes_remainder_cents():
-    from splitr.ledger import split_evenly
+    from splitr.services.expenses import split_evenly
 
     shares = split_evenly(100, ["a", "b", "c"])
     assert shares == {"a": 33.34, "b": 33.33, "c": 33.33}
@@ -567,11 +567,14 @@ def test_concurrent_requests_stay_consistent(tmp_path):
     """Parallel writers plus a reader: no errors, nothing lost, balances always net to 0."""
     import threading
 
-    from splitr import ledger
+    from splitr.services import balances as balance_service
+    from splitr.services import expenses as expense_service
+    from splitr.services import groups as group_service
+    from splitr.services import users as user_service
 
     app = create_app(str(tmp_path / "concurrent.db"))
-    user_ids = [ledger.create_user(n, f"{n}@example.com") for n in NAMES]
-    gid = ledger.create_group("g", user_ids)
+    user_ids = [user_service.create_user(n, f"{n}@example.com").id for n in NAMES]
+    gid = group_service.create_group("g", user_ids).id
     writers, per_writer = 6, 8
     errors, sums = [], []
     done = threading.Event()
@@ -581,7 +584,7 @@ def test_concurrent_requests_stay_consistent(tmp_path):
             for i in range(per_writer):
                 payer = user_ids[(n + i) % 3]
                 with app.app_context():
-                    ledger.add_expense(gid, payer, 10 + i)
+                    expense_service.add_expense(gid, payer, 10 + i)
         except Exception as e:
             errors.append(e)
 
@@ -589,8 +592,8 @@ def test_concurrent_requests_stay_consistent(tmp_path):
         try:
             while not done.is_set():
                 with app.app_context():
-                    balances = ledger.balances(gid)
-                    sums.append(round(sum(b["balance"] for b in balances.values()), 2))
+                    balances = balance_service.get_balances(gid)
+                    sums.append(round(sum(b.balance for b in balances), 2))
         except Exception as e:
             errors.append(e)
 
@@ -670,3 +673,91 @@ def test_queueing_failure_does_not_fail_the_expense(client, ids, group_id, monke
     )
     assert res.status_code == 201
     assert _count("expenses") == 1
+
+
+# --- architecture ------------------------------------------------------------
+
+
+def _imports(path):
+    """Every module name imported (absolute or relative) by a source file."""
+    import ast
+
+    names = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Import):
+            names.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            prefix = "." * node.level + (node.module or "")
+            names.add(prefix)
+            names.update(prefix.rstrip(".") + "." + a.name for a in node.names)
+    return names
+
+
+def _sources(layer):
+    from pathlib import Path
+
+    import splitr
+
+    return sorted((Path(splitr.__file__).parent / layer).glob("*.py"))
+
+
+def _violations(layer, forbidden):
+    """Imports in ``layer`` whose module path contains a forbidden word."""
+    bad = []
+    for path in _sources(layer):
+        for name in _imports(path):
+            parts = [p for p in name.replace(".", " ").split() if p]
+            if any(word in parts for word in forbidden):
+                bad.append(f"{layer}/{path.name} imports {name}")
+    return bad
+
+
+def test_models_import_nothing_from_the_app():
+    assert _violations("models", {"db", "repositories", "services", "controllers", "flask", "sqlite3"}) == []
+
+
+def test_repositories_do_not_know_about_services_or_http():
+    assert _violations("repositories", {"services", "controllers", "flask"}) == []
+
+
+def test_services_have_no_http_and_no_sql():
+    assert _violations("services", {"controllers", "flask", "sqlite3", "repositories_sql"}) == []
+    # Services reach the database only through repositories and db.transaction.
+    for path in _sources("services"):
+        assert "execute(" not in path.read_text(), f"SQL found in services/{path.name}"
+
+
+def test_controllers_only_talk_to_services():
+    assert _violations("controllers", {"repositories", "db", "sqlite3", "notifier"}) == []
+    for path in _sources("controllers"):
+        assert "execute(" not in path.read_text(), f"SQL found in controllers/{path.name}"
+
+
+def test_models_are_immutable_value_objects():
+    import dataclasses
+
+    from splitr.models import User
+
+    user = User(id="u1", name="alice")
+    assert user.email is None
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        user.name = "bob"
+
+
+def test_repository_refuses_unlisted_sort_column(client, group_id):
+    from splitr.repositories import expenses as expenses_repo
+
+    with pytest.raises(ValueError):
+        expenses_repo.list_for_group(group_id, 10, 0, "id; DROP TABLE expenses")
+
+
+def test_services_return_models(client, ids, group_id):
+    from splitr.models import Balance, Expense, Group, User
+    from splitr.services import balances, expenses, groups, users
+
+    assert isinstance(users.get_user(ids["alice"]), User)
+    assert isinstance(groups.create_group("x", [ids["alice"]]), Group)
+    expense, shares = expenses.add_expense(group_id, ids["alice"], 30)
+    assert isinstance(expense, Expense) and expense.id is not None
+    assert isinstance(expenses.list_expenses(group_id)[0], Expense)
+    assert all(isinstance(b, Balance) for b in balances.get_balances(group_id))
