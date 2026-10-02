@@ -171,3 +171,21 @@ def test_default_split_does_not_leak_between_groups(client):
     assert res.get_json()["shares"] == {"bob": 5, "bea": 5}
     assert client.get(f"/groups/{a}/balances").get_json()["balances"] == {"amy": 5, "ann": -5}
     assert client.get(f"/groups/{b}/balances").get_json()["balances"] == {"bob": 5, "bea": -5}
+
+
+def test_split_evenly_distributes_remainder_cents():
+    from splitr.ledger import split_evenly
+
+    shares = split_evenly(100, ["a", "b", "c"])
+    assert shares == {"a": 33.34, "b": 33.33, "c": 33.33}
+    assert round(sum(shares.values()), 2) == 100
+
+    assert split_evenly(0.01, ["a", "b", "c"]) == {"a": 0.01, "b": 0.0, "c": 0.0}
+    assert split_evenly(90, ["a", "b", "c"]) == {"a": 30, "b": 30, "c": 30}
+
+
+def test_uneven_split_balances_net_to_zero(client, group_id):
+    client.post(f"/groups/{group_id}/expenses", json={"paid_by": "alice", "amount": 100})
+    client.post(f"/groups/{group_id}/expenses", json={"paid_by": "bob", "amount": 10})
+    balances = client.get(f"/groups/{group_id}/balances").get_json()["balances"]
+    assert round(sum(balances.values()), 2) == 0

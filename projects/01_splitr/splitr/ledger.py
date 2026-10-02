@@ -46,19 +46,25 @@ def get_members(group_id):
 
 
 def split_evenly(amount, people):
-    """Divide ``amount`` equally between ``people``.
+    """Divide ``amount`` between ``people`` without losing or inventing cents.
 
-    Each share is ``amount / len(people)`` rounded to 2 decimal places.
+    Works in integer cents: every person gets ``total_cents // n`` and the
+    leftover cents (fewer than ``n``) are handed out one each to the first
+    people in the sequence. Shares therefore always sum exactly to ``amount``
+    (e.g. 100 among 3 -> 33.34, 33.33, 33.33).
 
     Args:
         amount: Total amount to split.
         people: Sequence of member names.
 
     Returns:
-        A ``{name: share}`` dict.
+        A ``{name: share}`` dict whose values sum to ``amount``.
     """
-    share = round(amount / len(people), 2)
-    return {p: share for p in people}
+    cents = round(amount * 100)
+    base, remainder = divmod(cents, len(people))
+    return {
+        p: (base + (1 if i < remainder else 0)) / 100 for i, p in enumerate(people)
+    }
 
 
 def add_expense(group_id, paid_by, amount, description="", split_among=None):
