@@ -128,8 +128,8 @@ def add_expense(group_id, paid_by, amount, description="", split_among=None):
     If ``split_among`` is empty the expense is split across every member of the
     group. Steps: load members, compute shares, insert the ``expenses`` row and
     one ``shares`` row per participant in one transaction (all-or-nothing),
-    commit, then send email notifications. A notification failure is logged and
-    does not affect the saved expense.
+    commit, then queue email notifications for background delivery. Notification
+    problems are logged and never affect the saved expense.
 
     Args:
         group_id: Group the expense belongs to.
@@ -183,12 +183,13 @@ def add_expense(group_id, paid_by, amount, description="", split_among=None):
                 (expense_id, member, share),
             )
 
-    # Notify only after the data is durably committed, and never let an email
-    # failure undo or fail an expense that has already been saved.
+    # Notify only after the data is durably committed. Emails are queued on a
+    # background worker so the request does not wait on the mail provider, and
+    # a queueing failure must never fail an expense that has already been saved.
     try:
-        notifier.notify_expense(members, paid_by, amount, description, shares)
+        notifier.notify_expense_async(members, paid_by, amount, description, shares)
     except Exception:
-        log.exception("expense %s saved but notification failed", expense_id)
+        log.exception("expense %s saved but notification was not queued", expense_id)
     return expense_id, shares
 
 

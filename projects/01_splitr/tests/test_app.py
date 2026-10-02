@@ -9,6 +9,16 @@ MEMBERS = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def drain_notifications():
+    """Emails are sent in the background; finish them so tests don't bleed into each other."""
+    from splitr import notifier
+
+    notifier.wait_for_pending(timeout=30)
+    yield
+    notifier.wait_for_pending(timeout=30)
+
+
 @pytest.fixture
 def client(tmp_path):
     app = create_app(str(tmp_path / "test.db"))
@@ -393,3 +403,59 @@ def test_concurrent_requests_stay_consistent(tmp_path):
     assert _count("expenses") == writers * per_writer
     assert _count("shares") == writers * per_writer * 3
     assert sums and all(s == 0 for s in sums)
+
+
+def test_expense_response_does_not_wait_for_emails(client, group_id, monkeypatch):
+    import threading
+
+    from splitr import notifier
+
+    release = threading.Event()
+    sent = []
+
+    def slow_send(to, subject, body):
+        release.wait(2)  # a stuck mail provider
+        sent.append(to)
+
+    monkeypatch.setattr(notifier, "send_email", slow_send)
+
+    res = client.post(f"/groups/{group_id}/expenses", json={"paid_by": "alice", "amount": 90})
+    assert res.status_code == 201
+    assert sent == []  # response came back before any email was delivered
+
+    release.set()
+    assert notifier.wait_for_pending(timeout=5)
+    assert sorted(sent) == ["alice@example.com", "bob@example.com", "carol@example.com"]
+
+
+def test_one_bad_address_does_not_block_other_emails(client, monkeypatch):
+    from splitr import notifier
+
+    sent = []
+    monkeypatch.setattr(notifier, "send_email", lambda to, s, b: sent.append(to))
+    members = [
+        {"name": "alice", "email": "alice@example.com"},
+        {"name": "bob", "email": None},
+        {"name": "carol", "email": "carol@example.com"},
+    ]
+
+    def flaky(to, subject, body):
+        if not to:
+            raise ValueError("invalid recipient")
+        sent.append(to)
+
+    monkeypatch.setattr(notifier, "send_email", flaky)
+    notifier.notify_expense(members, "alice", 30, "x", {"alice": 10, "bob": 10, "carol": 10})
+    assert sent == ["alice@example.com", "carol@example.com"]
+
+
+def test_queueing_failure_does_not_fail_the_expense(client, group_id, monkeypatch):
+    from splitr import notifier
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(notifier, "notify_expense_async", broken)
+    res = client.post(f"/groups/{group_id}/expenses", json={"paid_by": "alice", "amount": 90})
+    assert res.status_code == 201
+    assert _count("expenses") == 1
