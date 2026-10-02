@@ -1,4 +1,5 @@
 import logging
+import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -10,6 +11,10 @@ _local = threading.local()  # one connection (and transaction state) per thread
 _schema_lock = threading.Lock()
 _schema_ready = set()  # database paths whose schema has been created
 BUSY_TIMEOUT_SECONDS = 10
+
+
+class SchemaError(RuntimeError):
+    """The database file cannot be used because its schema is not supported."""
 
 SCHEMA_VERSION = 4
 # Older versions that are upgraded in place when opened. They have the same tables
@@ -123,7 +128,7 @@ def _ensure_schema(path):
     older layout is refused rather than silently mixed with the new one.
 
     Raises:
-        RuntimeError: If ``path`` holds a database with an unsupported old schema.
+        SchemaError: If ``path`` holds a database with an unsupported old schema.
     """
     with _schema_lock:
         if path in _schema_ready:
@@ -135,9 +140,10 @@ def _ensure_schema(path):
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'groups'"
             ).fetchone()
             if has_tables and version not in (SCHEMA_VERSION, *UPGRADABLE_FROM):
-                raise RuntimeError(
-                    "%s uses an old schema (version %s, need %s); "
-                    "delete it to start fresh" % (path, version, SCHEMA_VERSION)
+                raise SchemaError(
+                    "%s uses an old schema (version %s, need %s); move or delete "
+                    "it to start with a fresh database"
+                    % (os.path.abspath(path), version, SCHEMA_VERSION)
                 )
             # WAL lets readers run alongside the single writer.
             conn.execute("PRAGMA journal_mode=WAL")
@@ -167,7 +173,9 @@ def init(path):
     global _path
     _path = path
     close_conn()
-    return get_conn()
+    conn = get_conn()
+    log.info("using database %s", os.path.abspath(path))
+    return conn
 
 
 def get_conn():

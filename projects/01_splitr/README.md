@@ -113,6 +113,8 @@ From this folder, with the root venv activated (`source ../../.venv/bin/activate
 ```bash
 python -m pytest          # run the tests (one file: python -m pytest tests/test_idempotency.py)
 python run.py             # start the app at http://127.0.0.1:8080  (python run.py 8081 for another port)
+                          # the database is ./splitr.db, relative to where you run it; the log line
+                          # "using database ..." shows the full path
 SPLITR_DEBUG=1 python run.py   # local development only: auto-reload + interactive debugger
 ```
 
@@ -131,7 +133,7 @@ curl -s -XPOST localhost:8080/groups/1/expenses -H "$H" -d "{\"paid_by\":\"$A\",
 curl -s localhost:8080/groups/1/balances
 ```
 
-If you have a `splitr.db` from the original (name-based) version, delete it: the app refuses to open that
-layout. A database from the users/group_members versions (schema 2 or 3, float amounts) is upgraded
+If you have a `splitr.db` from the original (name-based) version, move it aside (`mv splitr.db splitr.old.db`) or
+delete it: the app refuses to open that layout and `python run.py` exits with a one-line error saying so. A database from the users/group_members versions (schema 2 or 3, float amounts) is upgraded
 in place on first start: amounts are converted to integer cents in one transaction, and nothing changes if
 the upgrade fails. Back up `splitr.db` first if it holds data you care about.
