@@ -8,6 +8,8 @@ from quota_gate.app import create_app
 SECRET = "test-secret-test-secret-test-secret-32b"
 ISSUER = "https://idp.example.test"
 AUDIENCE = "api://quota-gate"
+PARTNER_SECRET = "partner-secret-partner-secret-32bytes!"
+PARTNER_ISSUER = "https://partner.example"
 
 
 def mint_token(secret=SECRET, **overrides):
@@ -23,6 +25,12 @@ def mint_token(secret=SECRET, **overrides):
     claims.update(overrides)
     claims = {k: v for k, v in claims.items() if v is not None}
     return jwt.encode(claims, secret, algorithm="HS256")
+
+
+def partner_token(**overrides):
+    """A valid token from the partner IdP: its issuer, its secret, tenant org_3."""
+    defaults = {"secret": PARTNER_SECRET, "iss": PARTNER_ISSUER, "tid": "org_3", "sub": "partner_admin"}
+    return mint_token(**{**defaults, **overrides})
 
 
 def bearer(token):
@@ -44,7 +52,10 @@ def clock():
 
 @pytest.fixture
 def app(tmp_path, clock):
-    return create_app(str(tmp_path / "test.db"), SECRET, ISSUER, clock=clock)
+    return create_app(
+        str(tmp_path / "test.db"), SECRET, ISSUER, clock=clock,
+        partner_secret=PARTNER_SECRET,
+    )
 
 
 @pytest.fixture

@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import wraps
+from typing import Optional
 
 import jwt
 from flask import g, request
@@ -12,6 +13,26 @@ CHECK_SCOPE = "quota.check"
 
 
 @dataclass(frozen=True)
+class TrustedIssuer:
+    """An identity provider we accept tokens from, with its own key and tenant rule.
+
+    `only_tenants`: if set, tokens from this issuer may act on those tenants and no others.
+    `except_tenants`: tokens from this issuer may act on any tenant but these.
+    Tenant ids are compared exactly.
+    """
+
+    issuer: str
+    secret: str
+    only_tenants: Optional[frozenset] = None
+    except_tenants: frozenset = frozenset()
+
+    def permits(self, tenant_id):
+        if self.only_tenants is not None and tenant_id not in self.only_tenants:
+            return False
+        return tenant_id not in self.except_tenants
+
+
+@dataclass(frozen=True)
 class Principal:
     """Who is calling, taken only from a verified JWT."""
 
@@ -19,30 +40,36 @@ class Principal:
     tenant_id: str
     subject: str
     scopes: frozenset
+    trusted: TrustedIssuer = field(compare=False, repr=False)
 
     def require_scope(self, scope):
         if scope not in self.scopes:
             raise Forbidden(f"missing required scope '{scope}'")
 
     def require_tenant(self, tenant_id):
+        """Tenant binding (token tid == tenant acted on) AND the issuer's own tenant rule."""
         if tenant_id != self.tenant_id:
             raise Forbidden("token is not authorized for this tenant")
+        if not self.trusted.permits(tenant_id):
+            raise Forbidden("tokens from this issuer may not act on this tenant")
 
 
 class TokenVerifier:
-    def __init__(self, secret, issuer):
-        self._secret = secret
-        self._issuer = issuer
+    def __init__(self, trusted_issuers):
+        self._by_issuer = {t.issuer: t for t in trusted_issuers}
 
     def authenticate(self, authorization_header):
         token = self._bearer_token(authorization_header)
+        trusted = self._trusted_issuer_for(token)
         try:
+            # The key and the expected issuer both come from our own config for `trusted`,
+            # so a token can never be checked against another issuer's secret.
             claims = jwt.decode(
                 token,
-                self._secret,
+                trusted.secret,
                 algorithms=["HS256"],
                 audience=AUDIENCE,
-                issuer=self._issuer,
+                issuer=trusted.issuer,
                 options={"require": ["exp", "iss", "aud", "sub"]},
             )
         except jwt.InvalidTokenError as err:
@@ -55,7 +82,20 @@ class TokenVerifier:
             raise InvalidToken("invalid token: 'sub' must be a non-empty string")
         if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
             raise InvalidToken("invalid token: 'scp' must be a list of strings")
-        return Principal(claims["iss"], tenant_id, subject, frozenset(scopes))
+        return Principal(claims["iss"], tenant_id, subject, frozenset(scopes), trusted)
+
+    def _trusted_issuer_for(self, token):
+        """Pick which issuer's key to verify with. The unverified `iss` is used ONLY as a
+        lookup key into our own configured issuers; nothing else is trusted until the
+        signature has been verified with that issuer's secret."""
+        try:
+            claimed = jwt.decode(token, options={"verify_signature": False}).get("iss")
+        except jwt.InvalidTokenError as err:
+            raise InvalidToken(f"invalid token: {err}") from None
+        trusted = self._by_issuer.get(claimed) if isinstance(claimed, str) else None
+        if trusted is None:
+            raise InvalidToken("invalid token: unknown issuer")
+        return trusted
 
     @staticmethod
     def _bearer_token(header):

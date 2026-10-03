@@ -68,7 +68,7 @@ QUOTA_GATE_JWT_SECRET=dev-secret-change-me \
 QUOTA_GATE_ISSUER=https://idp.example.test \
 ../../.venv/bin/python run.py          # these four are the defaults
 
-../../.venv/bin/python -m pytest       # 260 tests, < 1s
+../../.venv/bin/python -m pytest       # 310 tests, ~1s
 ```
 
 Mint tokens and try it:
@@ -87,8 +87,13 @@ curl -i -X POST $H/v1/check -H "Authorization: Bearer $CHECK" -H "$J" \
 curl -i -X DELETE $H/v1/tenants/org_1/policies/export-cap -H "Authorization: Bearer $ADMIN"
 ```
 
-`scripts/mint_token.py [tenant] [scope ...]` (default `org_1 quota.admin`, 1 hour expiry).
-It uses the same `QUOTA_GATE_JWT_SECRET` / `QUOTA_GATE_ISSUER` env vars as the server.
+`scripts/mint_token.py [--partner] [tenant] [scope ...]` (default `org_1 quota.admin`, 1 hour expiry).
+It uses the same env vars as the server. `--partner` mints a token from the partner IdP (default
+tenant `org_3`) and needs `QUOTA_GATE_PARTNER_SECRET`.
+
+Partner IdP (follow-up requirement, section 4b): set `QUOTA_GATE_PARTNER_SECRET` to enable it
+(optionally `QUOTA_GATE_PARTNER_ISSUER`, default `https://partner.example`). It has **no default**:
+when unset, the partner issuer is simply not trusted.
 
 Test layout (`tests/`): auth, policies, validation, errors, check, specificity, cost-vs-burst,
 buckets (incl. concurrency), bucket eviction, repository, persistence (restart), services.
@@ -109,7 +114,8 @@ The dev secret (`dev-secret-change-me`, 20 bytes) is also below the 32 bytes RFC
 for HS256, hence the PyJWT `InsecureKeyLengthWarning` when minting.
 
 **What is verified.** Signature with the algorithm pinned to HS256 (so `alg: none` and algorithm
-confusion are rejected); `exp`, `iss`, `aud`, `sub` required; `iss` equals the configured issuer;
+confusion are rejected); `exp`, `iss`, `aud`, `sub` required; `iss` is one of the trusted issuers and the signature is
+checked with *that issuer's own* secret (see 4b);
 `aud` is `api://quota-gate` (string or list), so an ID-token-shaped JWT with `aud=spa` is rejected;
 `sub` and `tid` non-empty strings; `scp` a list of strings. Any failure is a 401 `invalid_token`,
 never a 500.
@@ -129,6 +135,46 @@ to the token would need a different token model (per-user tokens), which defeats
 Other: no token revocation (tokens are valid until `exp`); no clock-skew leeway; the Werkzeug dev
 server is not a production server (use gunicorn/uvicorn behind TLS); the admin principal is
 `(iss, tid, sub)` but it is not yet written to an audit log.
+
+### 4b. Follow-up requirement: partner IdP for org_3
+
+> Partner org_3 uses its own identity provider, `https://partner.example`, which signs with a
+> different secret (`QUOTA_GATE_PARTNER_SECRET`). Tokens from that issuer may act only on org_3.
+> Tokens from our issuer may act on any tenant except org_3. Everything else stays the same.
+
+**What changed** (`auth.py`, `app.py`, `run.py`; the services, buckets and repository were untouched):
+
+- `TokenVerifier` now takes a list of `TrustedIssuer(issuer, secret, only_tenants / except_tenants)`.
+  Ours: `except_tenants={org_3}`. The partner's: `only_tenants={org_3}`.
+- Verification picks the key from the token's `iss`, but the unverified `iss` is used **only as a
+  lookup key into our own configured issuers**. Unknown / non-string / differently-cased issuers are
+  a 401. The signature is then verified with that issuer's secret *and* `iss` must equal that
+  issuer, so a token can never be checked against another issuer's secret (no cross-signing).
+- `Principal.require_tenant` now enforces two things: tenant binding (token `tid` == tenant acted on,
+  unchanged) **and** the issuer's tenant rule. Either failure is a 403 (valid token, not allowed).
+  Order stays 401 -> 403 -> 400.
+- Partner tokens get exactly the same claim validation, scopes (`quota.admin` / `quota.check`) and
+  error shapes as ours; the partner's quota is independent of every other tenant's.
+
+**Interpretation I chose:** "any tenant except org_3" does *not* relax tenant binding. An `org_1`
+token still cannot touch `org_2`; the issuer rule is an extra restriction on top ("everything else
+stays the same"). Consequently our issuer can never act on org_3 even when `tid=org_3`, and a
+partner-signed token claiming `tid=org_1` is refused even though its `tid` matches the path.
+
+**Decisions / threat model**
+
+- **No default partner secret.** A guessable default would let anyone forge an org_3 admin token.
+  Unset or empty means the partner issuer is not trusted at all. Our issuer stays barred from
+  org_3 either way (fail closed). A test tries the obvious guesses against an unconfigured partner.
+- **Startup guard:** the partner issuer must differ from ours (`ValueError`), otherwise one issuer
+  entry would silently shadow the other.
+- **Blast radius of a leaked secret shrinks:** a leaked partner secret can only ever yield org_3
+  access; a leaked secret of ours can never yield org_3 access. Under the old single-issuer model
+  either would have meant everything.
+- Tenant ids are compared exactly, so `ORG_3` is just another tenant (and our issuer may use it).
+  If tenant ids should be case-insensitive that is a decision to make upstream, not here.
+- Verified by mutation: removing either tenant rule, never enforcing the rule, checking every token
+  with one secret, or trusting the partner with a default secret each fails tests.
 
 ## 5. Known gaps / what I scoped out
 
@@ -192,6 +238,12 @@ What I should be able to defend (the assistant's work, reviewed with the human):
   needed gitignoring (it was already covered by `*.db`).
 - An indentation error appeared in `quota_gate/app.py` after the assistant's last green run
   (probably an editor change); the human hit it on `run.py`, the assistant fixed that one line.
+
+Follow-up (live requirement change, partner IdP for org_3): done test-first in the same session;
+the design is in section 4b. The assistant's first test run caught two bugs in its own tests
+(PyJWT refuses to *encode* a non-string `iss`, so those tokens are hand-signed at the JWS level; a
+duplicated keyword argument), and mutation testing exposed a missing test for the "unconfigured
+partner with a guessable secret" case, which was then added.
 
 What was thrown away / not built, and why: a per-tenant policy cache (the indexed SQLite lookup
 was enough for now), a heap-based eviction (a periodic sweep is simpler), and a tenant-wide shared
