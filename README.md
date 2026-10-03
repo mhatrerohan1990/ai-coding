@@ -20,6 +20,7 @@ source .venv/bin/activate
 |---|---|---|---|
 | 01 | [splitr](projects/01_splitr) | Splitwise-style expense splitting (Flask + SQLite) · find bugs, 60 min | done, reviewed |
 | 02 | [quota_gate](projects/02_quota_gate) | Multi-tenant rate limiter with JWT auth (Okta-style) · build from spec, 3 h + live change | not started |
+| 03 | [tenant_invites](projects/03_tenant_invites) | Single-use tenant invite links with JWT authn/authz (FastAPI + SQLite) · build from spec, pair-programmed | done |
 
 ## Running a session
 
