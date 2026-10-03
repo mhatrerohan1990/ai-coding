@@ -1,0 +1,64 @@
+import time
+
+import jwt
+import pytest
+
+from quota_gate.app import create_app
+
+SECRET = "test-secret-test-secret-test-secret-32b"
+ISSUER = "https://idp.example.test"
+AUDIENCE = "api://quota-gate"
+
+
+def mint_token(secret=SECRET, **overrides):
+    """Mint a valid org_1 admin token. Pass claim=None to drop that claim."""
+    claims = {
+        "iss": ISSUER,
+        "aud": AUDIENCE,
+        "exp": int(time.time()) + 300,
+        "sub": "admin_1",
+        "tid": "org_1",
+        "scp": ["quota.admin"],
+    }
+    claims.update(overrides)
+    claims = {k: v for k, v in claims.items() if v is not None}
+    return jwt.encode(claims, secret, algorithm="HS256")
+
+
+def bearer(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+class FakeClock:
+    def __init__(self, now=1_727_740_000.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def clock():
+    return FakeClock()
+
+
+@pytest.fixture
+def app(tmp_path, clock):
+    return create_app(str(tmp_path / "test.db"), SECRET, ISSUER, clock=clock)
+
+
+@pytest.fixture
+def client(app):
+    return app.test_client()
+
+
+@pytest.fixture
+def admin(client):
+    """Headers for an org_1 token with quota.admin."""
+    return bearer(mint_token())
+
+
+@pytest.fixture
+def svc(client):
+    """Headers for an org_1 service token with quota.check only."""
+    return bearer(mint_token(sub="svc_1", scp=["quota.check"]))
