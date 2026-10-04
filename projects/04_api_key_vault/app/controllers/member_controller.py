@@ -3,6 +3,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.auth import require
 from app.db import get_db
 from app.services.admin_service import NotFoundError
 from app.services.member_service import MemberService
@@ -23,7 +24,7 @@ def introspect(body: IntrospectRequest, svc: MemberService = Depends(get_service
     return svc.introspect(body.secret)
 
 
-@router.get("/tenants/{tenant_id}/keys")
+@router.get("/tenants/{tenant_id}/keys", dependencies=[Depends(require("list", "admin", "member"))])
 def list_keys(tenant_id: str, svc: MemberService = Depends(get_service)):
     try:
         return svc.list_keys(tenant_id)

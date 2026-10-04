@@ -5,25 +5,43 @@ clients and gets the raw key back once; later introspect calls say whether a key
 
 ## Endpoints
 
-| Method & path | Audience | Purpose |
+| Method & path | Auth | Purpose |
 |---|---|---|
-| `POST /tenants/{tenant_id}/keys` `{name}` | admin | Create a key. Returns `{key_id, secret, prefix}`; the raw key is shown once. |
-| `POST /tenants/{tenant_id}/keys/{key_id}/revoke` | admin | Revoke. 204, also when already revoked; the next introspect is inactive. |
-| `POST /tenants/{tenant_id}/keys/{key_id}/rotate` | admin | New secret, same `key_id`. Returns `{key_id, secret}`. 409 if the key is revoked. |
-| `POST /keys/introspect` `{secret}` | member | Always 200: `{active: true, tenant_id, key_id, name}` or `{active: false}`. |
-| `GET /tenants/{tenant_id}/keys` | member | List `key_id`, `name`, `prefix`, `revoked`. |
+| `POST /tenants/{tenant_id}/keys` `{name}` | JWT `role=admin`, scope `create` | Create a key. Returns `{key_id, secret, prefix}`; the raw key is shown once. |
+| `POST /tenants/{tenant_id}/keys/{key_id}/revoke` | JWT `role=admin`, scope `revoke` | Revoke. 204, also when already revoked; the next introspect is inactive. |
+| `POST /tenants/{tenant_id}/keys/{key_id}/rotate` | JWT `role=admin`, scope `rotate` | New secret, same `key_id`. Returns `{key_id, secret}`. 409 if the key is revoked. |
+| `POST /keys/introspect` `{secret}` | none (the key is the credential) | Always 200: `{active: true, tenant_id, key_id, name}` or `{active: false}`. |
+| `GET /tenants/{tenant_id}/keys` | JWT `role` admin or member, scope `list` | List `key_id`, `name`, `prefix`, `revoked`. |
 | `GET /health` | none | Liveness. |
 
 ## Key format
 
 Raw key is `<prefix>.<secret>`. The secret is 256 bits from `secrets.token_urlsafe`. Only the
 prefix and a SHA-256 hash of the secret are stored. Introspect looks up by prefix and compares
-hashes with `hmac.compare_digest`. A revoked key stays revoked across rotate.
+hashes with `hmac.compare_digest`. Each key records `created_by` (the creating admin's `uid`) and
+`created_at` (UTC ISO timestamp). A revoked key stays revoked across rotate.
+
+## Authentication and authorization
+
+`Authorization: Bearer <JWT>`, HS256 (algorithm pinned), signed with the `JWT_SECRET` env var.
+The app refuses to start without it. Required claims: `exp`, `aud`, `tid`, `role`, `uid`.
+`aud` must be `api://keys`. `scope` is a space-separated string of endpoint scopes
+(`create`, `revoke`, `rotate`, `list`).
+
+- **401**: missing or non-Bearer header, bad signature, expired, wrong `aud`, missing claim,
+  unknown `role`, unknown or mismatched `uid` (see below), or `tid` not equal to the `{tenant_id}` in the path.
+- **403**: authenticated, but the role isn't allowed (a `member` on an admin endpoint) or the
+  token lacks the endpoint's scope.
+- **Users table:** the `uid` must exist in `users` (`uid`, `tenant_id`, `name`, `role`), its table
+  role must equal the token's `role`, and its `tenant_id` must equal the token's `tid`. Any
+  mismatch is a 401. Users are preseeded; there is no user API.
+- Admins may call the member endpoints; members may not call admin endpoints.
+- `POST /keys/introspect` and `GET /health` need no token.
 
 ## Known gaps
 
-- No authentication or admin/member role enforcement yet; the admin and member routes are open.
-- No `users` or `services` tables; keys are not scoped to services.
+- No audit log yet (who rotated or revoked); only the creator is recorded.
+- No `services` table; keys are not scoped to services.
 - No dummy hash compare on an unknown prefix, so timing can reveal whether a prefix exists.
 
 ## Run
@@ -31,24 +49,31 @@ hashes with `hmac.compare_digest`. A revoked key stays revoked across rotate.
 ```bash
 cd projects/04_api_key_vault
 python -m pytest
-python run.py
+JWT_SECRET=dev-secret-change-me-0123456789abcdef python run.py
 ```
 
 ## Try it with sample queries
 
-There is no tenant endpoint yet, so seed two tenants first (this creates `vault.db`):
+There are no tenant or user endpoints, so seed tenants `t1`/`t2` and an admin and a member in each
+(`uid` = `u-<role>-<tid>`). This creates `vault.db`; delete an old `vault.db` first, since the schema changed:
 
 ```bash
-python -c "
-import sqlite3, app.db as d
-c = sqlite3.connect(d.DB_PATH); d.init_db(c)
-c.execute(\"INSERT OR IGNORE INTO tenants VALUES ('t1','Tenant 1'),('t2','Tenant 2')\"); c.commit()"
-python run.py          # leave running; use a second terminal for the calls below
+python scripts/seed.py
+JWT_SECRET=dev-secret-change-me-0123456789abcdef python run.py   # leave running; use a second terminal for the calls below
+```
+
+Mint tokens in the second terminal (same `JWT_SECRET`):
+
+```bash
+export JWT_SECRET=dev-secret-change-me-0123456789abcdef
+ADMIN=$(python scripts/make_token.py --tid t1 --role admin)
+MEMBER=$(python scripts/make_token.py --tid t1 --role member --scope list)
+ADMIN_T2=$(python scripts/make_token.py --tid t2 --role admin)
 ```
 
 ```bash
 # 1. Create a key. The raw key in "secret" is shown only this once.
-curl -s -X POST localhost:8000/tenants/t1/keys \
+curl -s -X POST localhost:8000/tenants/t1/keys -H "Authorization: Bearer $ADMIN" \
   -H 'content-type: application/json' -d '{"name":"billing-worker"}'
 # {"key_id":"key_...","secret":"gk_live_ab12.<secret>","prefix":"gk_live_ab12"}
 
@@ -61,22 +86,28 @@ curl -s -X POST localhost:8000/keys/introspect \
   -H 'content-type: application/json' -d "{\"secret\":\"$SECRET\"}"
 # {"active":true,"tenant_id":"t1","key_id":"key_...","name":"billing-worker"}
 
-# 3. List the tenant's keys (hashes are never returned)
-curl -s localhost:8000/tenants/t1/keys
+# 3. List the tenant's keys as a member (hashes are never returned)
+curl -s localhost:8000/tenants/t1/keys -H "Authorization: Bearer $MEMBER"
 
 # 4. Rotate: same key_id, new secret. The old secret goes inactive.
-curl -s -X POST localhost:8000/tenants/t1/keys/$KEY_ID/rotate
+curl -s -X POST localhost:8000/tenants/t1/keys/$KEY_ID/rotate -H "Authorization: Bearer $ADMIN"
 curl -s -X POST localhost:8000/keys/introspect \
   -H 'content-type: application/json' -d "{\"secret\":\"$SECRET\"}"
 # {"active":false}
 
 # 5. Revoke, then rotate again: 409, and the key stays revoked
-curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/tenants/t1/keys/$KEY_ID/revoke
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/tenants/t1/keys/$KEY_ID/revoke -H "Authorization: Bearer $ADMIN"
 # 204
-curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/tenants/t1/keys/$KEY_ID/rotate
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/tenants/t1/keys/$KEY_ID/rotate -H "Authorization: Bearer $ADMIN"
 # 409
 
-# 6. Wrong tenant: 404
-curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/tenants/t2/keys/$KEY_ID/revoke
+# 6. Key under another tenant's admin: 404
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/tenants/t2/keys/$KEY_ID/revoke -H "Authorization: Bearer $ADMIN_T2"
 # 404
+
+# 7. Authz failures
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/tenants/t1/keys -H "Authorization: Bearer $MEMBER" \
+  -H 'content-type: application/json' -d '{"name":"x"}'          # member on admin endpoint: 403
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/tenants/t1/keys                                   # no token: 401
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/tenants/t2/keys -H "Authorization: Bearer $ADMIN" # tid mismatch: 401
 ```

@@ -1,8 +1,8 @@
-from tests.test_admin import client  # noqa: F401
+from tests.conftest import auth
 
 
 def _create(client, tenant="t1", name="x"):
-    return client.post(f"/tenants/{tenant}/keys", json={"name": name}).json()
+    return client.post(f"/tenants/{tenant}/keys", json={"name": name}, headers=auth(tid=tenant)).json()
 
 
 def test_introspect_active(client):
@@ -37,4 +37,4 @@ def test_list_keys_scoped_to_tenant(client):
     _create(client, "t2", "b")
     r = client.get("/tenants/t1/keys")
     assert r.json() == [{"key_id": a["key_id"], "name": "a", "prefix": a["prefix"], "revoked": False}]
-    assert client.get("/tenants/nope/keys").status_code == 404
+    assert client.get("/tenants/nope/keys", headers=auth(tid="nope")).status_code == 404

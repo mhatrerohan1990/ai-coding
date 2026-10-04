@@ -8,13 +8,21 @@ CREATE TABLE IF NOT EXISTS tenants (
     id   TEXT PRIMARY KEY,
     name TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS users (
+    uid       TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    name      TEXT NOT NULL,
+    role      TEXT NOT NULL CHECK (role IN ('admin', 'member'))
+);
 CREATE TABLE IF NOT EXISTS keys (
     key_id      TEXT PRIMARY KEY,
     tenant_id   TEXT NOT NULL REFERENCES tenants(id),
     name        TEXT NOT NULL,
     prefix      TEXT NOT NULL UNIQUE,
     secret_hash TEXT NOT NULL,
-    revoked     INTEGER NOT NULL DEFAULT 0
+    revoked     INTEGER NOT NULL DEFAULT 0,
+    created_by  TEXT NOT NULL REFERENCES users(uid),
+    created_at  TEXT NOT NULL
 );
 """
 

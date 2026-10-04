@@ -1,6 +1,7 @@
 import hashlib
 import secrets
 import sqlite3
+from datetime import datetime, timezone
 
 KEY_PREFIX = "gk_live_"
 
@@ -35,17 +36,18 @@ class AdminService:
             raise NotFoundError("key not found")
         return row
 
-    def create_key(self, tenant_id: str, name: str) -> dict:
+    def create_key(self, tenant_id: str, name: str, created_by: str) -> dict:
         self._require_tenant(tenant_id)
         key_id = "key_" + secrets.token_hex(8)
         secret = secrets.token_urlsafe(32)  # 256 bits
+        created_at = datetime.now(timezone.utc).isoformat()
         while True:
             prefix = KEY_PREFIX + secrets.token_hex(2)
             try:
                 self.db.execute(
-                    "INSERT INTO keys (key_id, tenant_id, name, prefix, secret_hash) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (key_id, tenant_id, name, prefix, _hash(secret)),
+                    "INSERT INTO keys (key_id, tenant_id, name, prefix, secret_hash, created_by, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (key_id, tenant_id, name, prefix, _hash(secret), created_by, created_at),
                 )
                 break
             except sqlite3.IntegrityError:
