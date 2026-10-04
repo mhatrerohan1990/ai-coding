@@ -26,8 +26,10 @@ The script prints one agent credential per tenant (`<prefix>.<secret>`). They ar
 
 ## Run the server
 
+Admin APIs verify HS256 JWTs signed with a shared secret read from `JWT_SECRET`.
+
 ```bash
-uvicorn app.main:app --reload
+JWT_SECRET=<shared secret> uvicorn app.main:app --reload
 ```
 
 - API: http://127.0.0.1:8000

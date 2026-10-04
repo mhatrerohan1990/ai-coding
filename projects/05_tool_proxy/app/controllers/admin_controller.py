@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
+from app.auth import require_admin
 from app.db import get_db
 from app.schemas import CreateGrantRequest, ToolCallResponse
 from app.services.admin_service import AdminService
 
-router = APIRouter(tags=["admin"])
+router = APIRouter(tags=["admin"], dependencies=[Depends(require_admin)])
 
 
 def get_admin_service(db: Session = Depends(get_db)) -> AdminService:
