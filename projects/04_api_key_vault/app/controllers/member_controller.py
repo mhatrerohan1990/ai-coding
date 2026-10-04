@@ -1,0 +1,31 @@
+import sqlite3
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from app.db import get_db
+from app.services.admin_service import NotFoundError
+from app.services.member_service import MemberService
+
+router = APIRouter()
+
+
+class IntrospectRequest(BaseModel):
+    secret: str
+
+
+def get_service(db: sqlite3.Connection = Depends(get_db)) -> MemberService:
+    return MemberService(db)
+
+
+@router.post("/keys/introspect")
+def introspect(body: IntrospectRequest, svc: MemberService = Depends(get_service)):
+    return svc.introspect(body.secret)
+
+
+@router.get("/tenants/{tenant_id}/keys")
+def list_keys(tenant_id: str, svc: MemberService = Depends(get_service)):
+    try:
+        return svc.list_keys(tenant_id)
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
