@@ -71,9 +71,17 @@ def seed() -> None:
                 )
             )
 
+        tenant_ids = {t.name: t.id for t in (acme, globex)}
+        user_ids = {name: u.id for name, u in users.items()}
         db.commit()
 
-    print("Seeded. Agent credentials (shown once):")
+    print("Tenants:")
+    for name, tenant_id in tenant_ids.items():
+        print(f"  {name}: {tenant_id}")
+    print("Users:")
+    for name, user_id in user_ids.items():
+        print(f"  {name}: {user_id}")
+    print("Agent credentials (shown once):")
     for tenant_name, token in creds.items():
         print(f"  {tenant_name}: {token}")
 
