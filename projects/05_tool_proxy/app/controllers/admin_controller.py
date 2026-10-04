@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.schemas import CreateGrantRequest
+from app.schemas import CreateGrantRequest, ToolCallResponse
 from app.services.admin_service import AdminService
 
 router = APIRouter(tags=["admin"])
@@ -22,6 +22,11 @@ def create_grant(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/tenants/{tenant_id}/tool-calls")
-def list_tool_calls(tenant_id: str, service: AdminService = Depends(get_admin_service)):
-    return service.list_tool_calls(tenant_id)
+@router.get("/tenants/{tenant_id}/tool-calls", response_model=list[ToolCallResponse])
+def list_tool_calls(
+    tenant_id: str,
+    limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    service: AdminService = Depends(get_admin_service),
+):
+    return service.list_tool_calls(tenant_id, limit, offset)

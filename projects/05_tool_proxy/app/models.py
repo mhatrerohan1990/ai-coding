@@ -85,3 +85,14 @@ class TenantAgentAccess(AuditMixin, Base):
     # only the sha256 of the secret part is stored.
     secret_prefix: Mapped[str] = mapped_column(String, unique=True)
     secret_hash: Mapped[str] = mapped_column(String)
+
+
+class ToolCall(AuditMixin, Base):
+    __tablename__ = "tool_call"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenant.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("user.id"))
+    agent_id: Mapped[str] = mapped_column(ForeignKey("agent.id"))
+    tool: Mapped[str] = mapped_column(String)
+    allowed: Mapped[bool] = mapped_column(Boolean)

@@ -2,8 +2,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.exceptions import BadRequestError, NotFoundError
-from app.models import Tenant, Tool, ToolAccess, User
-from app.schemas import CreateGrantRequest
+from app.models import Tenant, Tool, ToolAccess, ToolCall, User
+from app.schemas import CreateGrantRequest, ToolCallResponse
 
 
 class AdminService:
@@ -35,5 +35,27 @@ class AdminService:
             access.enabled = True
         self.db.commit()
 
-    def list_tool_calls(self, tenant_id: str) -> None:
-        pass
+    def list_tool_calls(
+        self, tenant_id: str, limit: int, offset: int
+    ) -> list[ToolCallResponse]:
+        if self.db.get(Tenant, tenant_id) is None:
+            raise NotFoundError("tenant not found")
+
+        calls = self.db.scalars(
+            select(ToolCall)
+            .where(ToolCall.tenant_id == tenant_id)
+            .order_by(ToolCall.created_at.desc(), ToolCall.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return [
+            ToolCallResponse(
+                call_id=c.id,
+                actor_sub=c.user_id,
+                agent_id=c.agent_id,
+                tool=c.tool,
+                allowed=c.allowed,
+                created_at=c.created_at,
+            )
+            for c in calls
+        ]
