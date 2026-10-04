@@ -22,6 +22,7 @@ source .venv/bin/activate
 | 02 | [quota_gate](projects/02_quota_gate) | Multi-tenant rate limiter with JWT auth (Okta-style) · build from spec, 3 h + live change | not started |
 | 03 | [tenant_invites](projects/03_tenant_invites) | Single-use tenant invite links with JWT authn/authz (FastAPI + SQLite) · build from spec, pair-programmed | done |
 | 04 | [api_key_vault](projects/04_api_key_vault) | Multi-tenant API key vault: create, revoke, rotate, introspect (FastAPI + SQLite) · build from spec, pair-programmed | in progress |
+| 05 | [tool_proxy](projects/05_tool_proxy) | Multi-tenant authz proxy in front of MCP tools, confused-deputy safe (FastAPI + SQLite) · build from spec, pair-programmed | in progress |
 
 ## Running a session
 
