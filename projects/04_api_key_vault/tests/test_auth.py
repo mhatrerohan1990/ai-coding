@@ -76,7 +76,7 @@ def test_admin_with_scope_succeeds_and_member_can_list(anon):
 
 def test_introspect_and_health_need_no_token(anon):
     assert anon.get("/health").status_code == 200
-    assert anon.post("/keys/introspect", json={"secret": "x.y"}).json() == {"active": False}
+    assert anon.post("/keys/introspect", json={"secret": "x.y"}).status_code == 404  # reachable without a token
 
 
 def test_app_refuses_to_start_without_secret(monkeypatch):

@@ -57,16 +57,28 @@ class AdminService:
 
     def revoke_key(self, tenant_id: str, key_id: str) -> None:
         self._require_key(tenant_id, key_id)
-        self.db.execute("UPDATE keys SET revoked = 1 WHERE key_id = ?", (key_id,))
+        self.db.execute("UPDATE keys SET status = 'REVOKED' WHERE key_id = ?", (key_id,))
         self.db.commit()
 
     def rotate_key(self, tenant_id: str, key_id: str) -> dict:
         row = self._require_key(tenant_id, key_id)
-        if row["revoked"]:
-            raise ConflictError("key is revoked")
-        secret = secrets.token_urlsafe(32)
-        self.db.execute(
-            "UPDATE keys SET secret_hash = ? WHERE key_id = ?", (_hash(secret), key_id)
+        # Claim: only one caller can move ACTIVE -> ROTATING. Everyone else is rejected.
+        claim = self.db.execute(
+            "UPDATE keys SET status = 'ROTATING' "
+            "WHERE key_id = ? AND tenant_id = ? AND status = 'ACTIVE'",
+            (key_id, tenant_id),
         )
         self.db.commit()
+        if claim.rowcount == 0:
+            raise ConflictError("key is not active")
+        secret = secrets.token_urlsafe(32)
+        # Finish: only if we still own the rotation (a revoke in between turns it REVOKED).
+        done = self.db.execute(
+            "UPDATE keys SET secret_hash = ?, status = 'ACTIVE' "
+            "WHERE key_id = ? AND status = 'ROTATING'",
+            (_hash(secret), key_id),
+        )
+        self.db.commit()
+        if done.rowcount == 0:
+            raise ConflictError("key was revoked during rotation")
         return {"key_id": key_id, "secret": f"{row['prefix']}.{secret}"}

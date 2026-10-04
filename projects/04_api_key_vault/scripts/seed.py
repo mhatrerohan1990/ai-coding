@@ -3,8 +3,12 @@
     python scripts/seed.py
 """
 import sqlite3
+import sys
+from pathlib import Path
 
-import app.db as db
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import app.db as db  # noqa: E402
 
 conn = sqlite3.connect(db.DB_PATH)
 db.init_db(conn)

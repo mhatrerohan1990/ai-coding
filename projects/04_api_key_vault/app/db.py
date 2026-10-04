@@ -20,10 +20,11 @@ CREATE TABLE IF NOT EXISTS keys (
     name        TEXT NOT NULL,
     prefix      TEXT NOT NULL UNIQUE,
     secret_hash TEXT NOT NULL,
-    revoked     INTEGER NOT NULL DEFAULT 0,
+    status      TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'ROTATING', 'REVOKED')),
     created_by  TEXT NOT NULL REFERENCES users(uid),
     created_at  TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_keys_tenant_id ON keys(tenant_id);
 """
 
 

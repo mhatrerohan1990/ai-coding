@@ -16,11 +16,11 @@ class MemberService:
             return inactive
         row = self.db.execute("SELECT * FROM keys WHERE prefix = ?", (prefix,)).fetchone()
         if row is None:
-            return inactive
+            raise NotFoundError("prefix not found")
         presented = hashlib.sha256(secret.encode()).hexdigest()
         if not hmac.compare_digest(presented, row["secret_hash"]):
             return inactive
-        if row["revoked"]:
+        if row["status"] != "ACTIVE":
             return inactive
         return {
             "active": True,
@@ -33,9 +33,9 @@ class MemberService:
         if self.db.execute("SELECT 1 FROM tenants WHERE id = ?", (tenant_id,)).fetchone() is None:
             raise NotFoundError("tenant not found")
         rows = self.db.execute(
-            "SELECT key_id, name, prefix, revoked FROM keys WHERE tenant_id = ?", (tenant_id,)
+            "SELECT key_id, name, prefix, status FROM keys WHERE tenant_id = ?", (tenant_id,)
         ).fetchall()
         return [
-            {"key_id": r["key_id"], "name": r["name"], "prefix": r["prefix"], "revoked": bool(r["revoked"])}
+            {"key_id": r["key_id"], "name": r["name"], "prefix": r["prefix"], "status": r["status"]}
             for r in rows
         ]

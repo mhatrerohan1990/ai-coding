@@ -8,10 +8,10 @@ clients and gets the raw key back once; later introspect calls say whether a key
 | Method & path | Auth | Purpose |
 |---|---|---|
 | `POST /tenants/{tenant_id}/keys` `{name}` | JWT `role=admin`, scope `create` | Create a key. Returns `{key_id, secret, prefix}`; the raw key is shown once. |
-| `POST /tenants/{tenant_id}/keys/{key_id}/revoke` | JWT `role=admin`, scope `revoke` | Revoke. 204, also when already revoked; the next introspect is inactive. |
-| `POST /tenants/{tenant_id}/keys/{key_id}/rotate` | JWT `role=admin`, scope `rotate` | New secret, same `key_id`. Returns `{key_id, secret}`. 409 if the key is revoked. |
-| `POST /keys/introspect` `{secret}` | none (the key is the credential) | Always 200: `{active: true, tenant_id, key_id, name}` or `{active: false}`. |
-| `GET /tenants/{tenant_id}/keys` | JWT `role` admin or member, scope `list` | List `key_id`, `name`, `prefix`, `revoked`. |
+| `POST /tenants/{tenant_id}/keys/{key_id}/revoke` | JWT `role=admin`, scope `revoke` | Revoke. 204, also when already `REVOKED` or while `ROTATING`; the next introspect is inactive. |
+| `POST /tenants/{tenant_id}/keys/{key_id}/rotate` | JWT `role=admin`, scope `rotate` | New secret, same `key_id`. Returns `{key_id, secret}`. 409 if the key is not `ACTIVE` (revoked, or another rotate is in progress); no secret is issued. |
+| `POST /keys/introspect` `{secret}` | none (the key is the credential) | 200 `{active: true, tenant_id, key_id, name}` or `{active: false}` (wrong secret, status not `ACTIVE`, malformed). 404 with no body if the prefix is unknown. |
+| `GET /tenants/{tenant_id}/keys` | JWT `role` admin or member, scope `list` | List `key_id`, `name`, `prefix`, `status`. |
 | `GET /health` | none | Liveness. |
 
 ## Key format
@@ -19,7 +19,17 @@ clients and gets the raw key back once; later introspect calls say whether a key
 Raw key is `<prefix>.<secret>`. The secret is 256 bits from `secrets.token_urlsafe`. Only the
 prefix and a SHA-256 hash of the secret are stored. Introspect looks up by prefix and compares
 hashes with `hmac.compare_digest`. Each key records `created_by` (the creating admin's `uid`) and
-`created_at` (UTC ISO timestamp). A revoked key stays revoked across rotate.
+`created_at` (UTC ISO timestamp).
+
+## Key status
+
+`status` is `ACTIVE`, `ROTATING` or `REVOKED`. Only `ACTIVE` introspects as active.
+
+- **rotate:** claims the key with `UPDATE ... SET status='ROTATING' WHERE status='ACTIVE'`; exactly
+  one concurrent caller wins, the rest get 409 and no secret. The winner then writes the new hash
+  and sets `ACTIVE` with `WHERE status='ROTATING'`; if a revoke landed in between, that write
+  matches nothing, the caller gets 409 and no secret, and the key stays `REVOKED`.
+- **revoke:** sets `REVOKED` from any state. A revoked key stays revoked across rotate.
 
 ## Authentication and authorization
 
@@ -40,6 +50,8 @@ The app refuses to start without it. Required claims: `exp`, `aud`, `tid`, `role
 
 ## Known gaps
 
+- A crash between the `ROTATING` claim and the final write leaves the key stuck in `ROTATING`
+  (no recovery rule yet).
 - No audit log yet (who rotated or revoked); only the creator is recorded.
 - No `services` table; keys are not scoped to services.
 - No dummy hash compare on an unknown prefix, so timing can reveal whether a prefix exists.

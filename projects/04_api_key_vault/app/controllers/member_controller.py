@@ -1,6 +1,6 @@
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from app.auth import require
@@ -21,7 +21,10 @@ def get_service(db: sqlite3.Connection = Depends(get_db)) -> MemberService:
 
 @router.post("/keys/introspect")
 def introspect(body: IntrospectRequest, svc: MemberService = Depends(get_service)):
-    return svc.introspect(body.secret)
+    try:
+        return svc.introspect(body.secret)
+    except NotFoundError:
+        return Response(status_code=404)  # no body, no message
 
 
 @router.get("/tenants/{tenant_id}/keys", dependencies=[Depends(require("list", "admin", "member"))])
