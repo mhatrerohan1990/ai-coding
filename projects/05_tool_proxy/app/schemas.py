@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -16,3 +17,12 @@ class ToolCallResponse(BaseModel):
     tool: str
     allowed: bool
     created_at: datetime
+
+
+class AgentToolCallRequest(BaseModel):
+    tool: str
+    args: dict[str, Any] = {}
+
+
+class AgentToolCallResponse(BaseModel):
+    allowed: bool
