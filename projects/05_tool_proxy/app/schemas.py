@@ -13,7 +13,7 @@ class CreateGrantRequest(BaseModel):
 class ToolCallResponse(BaseModel):
     call_id: str
     actor_sub: str
-    agent_id: str
+    agent_id: str | None
     tool: str
     allowed: bool
     created_at: datetime

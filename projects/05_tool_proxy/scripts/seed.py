@@ -49,12 +49,12 @@ def seed() -> None:
 
         db.add_all(
             [
-                ToolAccess(user_id=users["alice"].id, tool_id=list_users.id),
-                ToolAccess(user_id=users["alice"].id, tool_id=export_users.id),
-                ToolAccess(user_id=users["alice"].id, tool_id=disable_user.id),
-                ToolAccess(user_id=users["bob"].id, tool_id=list_users.id),
-                ToolAccess(user_id=users["carol"].id, tool_id=list_users.id),
-                ToolAccess(user_id=users["dave"].id, tool_id=list_users.id),
+                ToolAccess(user_id=users["alice"].id, tool_id=list_users.id, agent_id=assistant.id),
+                ToolAccess(user_id=users["alice"].id, tool_id=export_users.id, agent_id=assistant.id),
+                ToolAccess(user_id=users["alice"].id, tool_id=disable_user.id, agent_id=assistant.id),
+                ToolAccess(user_id=users["bob"].id, tool_id=list_users.id, agent_id=assistant.id),
+                ToolAccess(user_id=users["carol"].id, tool_id=list_users.id, agent_id=assistant.id),
+                ToolAccess(user_id=users["dave"].id, tool_id=list_users.id, agent_id=assistant.id),
             ]
         )
 

@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.exceptions import BadRequestError, NotFoundError
-from app.models import Tenant, Tool, ToolAccess, ToolCall, User
+from app.models import Tenant, Tool, ToolAccess, User
 from app.schemas import CreateGrantRequest, ToolCallResponse
 
 
@@ -41,21 +41,23 @@ class AdminService:
         if self.db.get(Tenant, tenant_id) is None:
             raise NotFoundError("tenant not found")
 
-        calls = self.db.scalars(
-            select(ToolCall)
-            .where(ToolCall.tenant_id == tenant_id)
-            .order_by(ToolCall.created_at.desc(), ToolCall.id.desc())
+        rows = self.db.execute(
+            select(ToolAccess, Tool.name)
+            .join(User, User.id == ToolAccess.user_id)
+            .join(Tool, Tool.id == ToolAccess.tool_id)
+            .where(User.tenant_id == tenant_id)
+            .order_by(ToolAccess.created_at.desc(), ToolAccess.id.desc())
             .limit(limit)
             .offset(offset)
         )
         return [
             ToolCallResponse(
-                call_id=c.id,
-                actor_sub=c.user_id,
-                agent_id=c.agent_id,
-                tool=c.tool,
-                allowed=c.allowed,
-                created_at=c.created_at,
+                call_id=access.id,
+                actor_sub=access.user_id,
+                agent_id=access.agent_id,
+                tool=tool_name,
+                allowed=access.enabled,
+                created_at=access.created_at,
             )
-            for c in calls
+            for access, tool_name in rows
         ]
