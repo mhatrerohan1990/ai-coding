@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS keys (
     created_by  TEXT NOT NULL REFERENCES users(uid),
     created_at  TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_keys_tenant_id ON keys(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_keys_tenant_name ON keys(tenant_id, name, key_id);
 """
 
 
@@ -36,6 +36,7 @@ def init_db(conn: sqlite3.Connection) -> None:
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")  # per-connection in SQLite
     init_db(conn)
     try:
         yield conn

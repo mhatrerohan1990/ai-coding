@@ -1,5 +1,7 @@
 import sqlite3
 
+import pytest
+
 import app.db as db
 from tests.conftest import auth
 
@@ -165,3 +167,46 @@ def test_revoke_while_rotating_is_allowed(client):
     _set_status(kid, "ROTATING")
     assert client.post(f"/tenants/t1/keys/{kid}/revoke").status_code == 204
     assert _row(kid)["status"] == "REVOKED"
+
+
+def _app_conn():
+    gen = db.get_db()
+    return gen, next(gen)
+
+
+def test_foreign_keys_are_enforced():
+    import pytest
+
+    gen, conn = _app_conn()
+    try:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        with pytest.raises(sqlite3.IntegrityError):  # users.tenant_id -> tenants
+            conn.execute("INSERT INTO users VALUES ('u-x', 'no-such-tenant', 'X', 'admin')")
+        with pytest.raises(sqlite3.IntegrityError):  # keys.tenant_id -> tenants
+            conn.execute(
+                "INSERT INTO keys (key_id, tenant_id, name, prefix, secret_hash, created_by, created_at) "
+                "VALUES ('k', 'no-such-tenant', 'n', 'p1', 'h', 'u-admin-t1', 'now')"
+            )
+        with pytest.raises(sqlite3.IntegrityError):  # keys.created_by -> users
+            conn.execute(
+                "INSERT INTO keys (key_id, tenant_id, name, prefix, secret_hash, created_by, created_at) "
+                "VALUES ('k', 't1', 'n', 'p2', 'h', 'no-such-user', 'now')"
+            )
+    finally:
+        gen.close()
+
+
+@pytest.mark.parametrize("name,ok", [
+    ("a", True), ("x" * 50, True), ("  padded  ", True),
+    ("", False), ("   ", False), ("x" * 51, False),
+])
+def test_name_validation(client, name, ok):
+    r = client.post("/tenants/t1/keys", json={"name": name})
+    assert r.status_code == (200 if ok else 422)
+    if ok:
+        assert _row(r.json()["key_id"])["name"] == name.strip()
+
+
+def test_name_must_be_a_string(client):
+    assert client.post("/tenants/t1/keys", json={"name": 5}).status_code == 422
+    assert client.post("/tenants/t1/keys", json={}).status_code == 422

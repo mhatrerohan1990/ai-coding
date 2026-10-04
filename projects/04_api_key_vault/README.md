@@ -7,11 +7,11 @@ clients and gets the raw key back once; later introspect calls say whether a key
 
 | Method & path | Auth | Purpose |
 |---|---|---|
-| `POST /tenants/{tenant_id}/keys` `{name}` | JWT `role=admin`, scope `create` | Create a key. Returns `{key_id, secret, prefix}`; the raw key is shown once. |
+| `POST /tenants/{tenant_id}/keys` `{name}` (1-50 chars after trimming; else 422) | JWT `role=admin`, scope `create` | Create a key. Returns `{key_id, secret, prefix}`; the raw key is shown once. |
 | `POST /tenants/{tenant_id}/keys/{key_id}/revoke` | JWT `role=admin`, scope `revoke` | Revoke. 204, also when already `REVOKED` or while `ROTATING`; the next introspect is inactive. |
 | `POST /tenants/{tenant_id}/keys/{key_id}/rotate` | JWT `role=admin`, scope `rotate` | New secret, same `key_id`. Returns `{key_id, secret}`. 409 if the key is not `ACTIVE` (revoked, or another rotate is in progress); no secret is issued. |
 | `POST /keys/introspect` `{secret}` | none (the key is the credential) | 200 `{active: true, tenant_id, key_id, name}` or `{active: false}` (wrong secret, status not `ACTIVE`, malformed). 404 with no body if the prefix is unknown. |
-| `GET /tenants/{tenant_id}/keys` | JWT `role` admin or member, scope `list` | List `key_id`, `name`, `prefix`, `status`. |
+| `GET /tenants/{tenant_id}/keys` | JWT `role` admin or member, scope `list` | Cursor-paginated list, see below. |
 | `GET /health` | none | Liveness. |
 
 ## Key format
@@ -20,6 +20,19 @@ Raw key is `<prefix>.<secret>`. The secret is 256 bits from `secrets.token_urlsa
 prefix and a SHA-256 hash of the secret are stored. Introspect looks up by prefix and compares
 hashes with `hmac.compare_digest`. Each key records `created_by` (the creating admin's `uid`) and
 `created_at` (UTC ISO timestamp).
+
+## Listing keys (cursor pagination)
+
+`GET /tenants/{tenant_id}/keys?limit=<n>&cursor=<c>` returns
+
+```json
+{"items": [{"key_id": "...", "name": "...", "prefix": "...", "status": "ACTIVE"}], "next_cursor": "..." }
+```
+
+Ordered by `name`, then `key_id` (names aren't unique). `limit` defaults to 20, allowed 1-50. `next_cursor` is
+`null` on the last page; pass it back as `cursor` for the next one. A key created between page
+requests is returned if it sorts after the cursor and is not revisited if it sorts before it. A `limit` outside 1-50 or not an integer, or a
+malformed `cursor`, is a 400. The cursor is opaque (base64); treat it as a token.
 
 ## Key status
 
@@ -98,7 +111,7 @@ curl -s -X POST localhost:8000/keys/introspect \
   -H 'content-type: application/json' -d "{\"secret\":\"$SECRET\"}"
 # {"active":true,"tenant_id":"t1","key_id":"key_...","name":"billing-worker"}
 
-# 3. List the tenant's keys as a member (hashes are never returned)
+# 3. List the tenant's keys as a member (add ?limit=2 and ?cursor=<next_cursor> to page)
 curl -s localhost:8000/tenants/t1/keys -H "Authorization: Bearer $MEMBER"
 
 # 4. Rotate: same key_id, new secret. The old secret goes inactive.

@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from app.auth import require
 from app.db import get_db
-from app.services.admin_service import NotFoundError
+from app.services.admin_service import BadRequestError, NotFoundError
 from app.services.member_service import MemberService
 
 router = APIRouter()
@@ -28,8 +28,15 @@ def introspect(body: IntrospectRequest, svc: MemberService = Depends(get_service
 
 
 @router.get("/tenants/{tenant_id}/keys", dependencies=[Depends(require("list", "admin", "member"))])
-def list_keys(tenant_id: str, svc: MemberService = Depends(get_service)):
+def list_keys(
+    tenant_id: str,
+    limit: str | None = None,
+    cursor: str | None = None,
+    svc: MemberService = Depends(get_service),
+):
     try:
-        return svc.list_keys(tenant_id)
+        return svc.list_keys(tenant_id, limit, cursor)
     except NotFoundError as e:
         raise HTTPException(404, str(e))
+    except BadRequestError as e:
+        raise HTTPException(400, str(e))

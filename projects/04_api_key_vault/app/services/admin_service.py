@@ -14,6 +14,10 @@ class ConflictError(Exception):
     pass
 
 
+class BadRequestError(Exception):
+    pass
+
+
 def _hash(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
 

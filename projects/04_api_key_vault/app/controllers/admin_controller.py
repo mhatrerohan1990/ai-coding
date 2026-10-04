@@ -1,7 +1,8 @@
 import sqlite3
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, StringConstraints
 
 from app.auth import Principal, require
 from app.db import get_db
@@ -11,7 +12,7 @@ router = APIRouter()
 
 
 class CreateKeyRequest(BaseModel):
-    name: str
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
 
 
 def get_service(db: sqlite3.Connection = Depends(get_db)) -> AdminService:
