@@ -43,8 +43,11 @@ def test_create_unknown_tenant_404(client):
 
 def test_revoke(client):
     kid = client.post("/tenants/t1/keys", json={"name": "x"}).json()["key_id"]
-    assert client.post(f"/tenants/t1/keys/{kid}/revoke").status_code == 200
+    r = client.post(f"/tenants/t1/keys/{kid}/revoke")
+    assert r.status_code == 204 and r.content == b""
     assert _row(kid)["revoked"] == 1
+    # already revoked stays 204
+    assert client.post(f"/tenants/t1/keys/{kid}/revoke").status_code == 204
 
 
 def test_rotate_keeps_key_id_and_changes_secret(client):

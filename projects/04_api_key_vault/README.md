@@ -8,7 +8,7 @@ clients and gets the raw key back once; later introspect calls say whether a key
 | Method & path | Audience | Purpose |
 |---|---|---|
 | `POST /tenants/{tenant_id}/keys` `{name}` | admin | Create a key. Returns `{key_id, secret, prefix}`; the raw key is shown once. |
-| `POST /tenants/{tenant_id}/keys/{key_id}/revoke` | admin | Revoke. Idempotent; the next introspect is inactive. |
+| `POST /tenants/{tenant_id}/keys/{key_id}/revoke` | admin | Revoke. 204, also when already revoked; the next introspect is inactive. |
 | `POST /tenants/{tenant_id}/keys/{key_id}/rotate` | admin | New secret, same `key_id`. Returns `{key_id, secret}`. 409 if the key is revoked. |
 | `POST /keys/introspect` `{secret}` | member | Always 200: `{active: true, tenant_id, key_id, name}` or `{active: false}`. |
 | `GET /tenants/{tenant_id}/keys` | member | List `key_id`, `name`, `prefix`, `revoked`. |
@@ -71,7 +71,8 @@ curl -s -X POST localhost:8000/keys/introspect \
 # {"active":false}
 
 # 5. Revoke, then rotate again: 409, and the key stays revoked
-curl -s -X POST localhost:8000/tenants/t1/keys/$KEY_ID/revoke
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/tenants/t1/keys/$KEY_ID/revoke
+# 204
 curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/tenants/t1/keys/$KEY_ID/rotate
 # 409
 

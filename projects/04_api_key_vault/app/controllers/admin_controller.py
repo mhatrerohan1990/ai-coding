@@ -1,6 +1,6 @@
 import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
 from app.db import get_db
@@ -25,13 +25,13 @@ def create_key(tenant_id: str, body: CreateKeyRequest, svc: AdminService = Depen
         raise HTTPException(404, str(e))
 
 
-@router.post("/tenants/{tenant_id}/keys/{key_id}/revoke")
+@router.post("/tenants/{tenant_id}/keys/{key_id}/revoke", status_code=204)
 def revoke_key(tenant_id: str, key_id: str, svc: AdminService = Depends(get_service)):
     try:
         svc.revoke_key(tenant_id, key_id)
     except NotFoundError as e:
         raise HTTPException(404, str(e))
-    return {"key_id": key_id, "revoked": True}
+    return Response(status_code=204)
 
 
 @router.post("/tenants/{tenant_id}/keys/{key_id}/rotate")
