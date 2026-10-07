@@ -142,3 +142,27 @@ evals/
 2. Define Zod schemas for params, body and response in the route's `schema`.
 3. Register it in `src/app.ts` with `app.register(...)`.
 4. Add `test/<name>.test.ts` using `buildApp()` and `app.inject()`.
+
+## Notes and remaining TODO
+
+Time-boxed practice, so these are known and deliberately left open.
+
+**Decisions made**
+- Plan priority is applied in code after the model: `enterprise` +1 severity (max `high`), `pro` unchanged, `free` `medium`→`low` (never demotes `high`). The model never sees the plan.
+- Output shape is fixed to `{ category, severity, rationale }`, so priority can only show up in `severity`. Adjustments are visible in the `x-triage-model-severity` header.
+- Prompt hardening alone did not stop prompt injection on `llama3.1:8b` (measured, then reverted). Code guards in `src/triage/guard.ts` fixed it instead.
+
+**Known issues (latest eval: llama3.1:8b, 26 cases, 76.9% both correct)**
+- Severity is over-rated on some `medium` tickets (model says `high`): `bug-wrong-totals`, `bug-pdf-blank`, `billing-wrong-name`.
+- Two eval labels are probably mine and debatable: `billing-plan-question` (`billing` vs `other`) and `billing-assistant-injection` (`billing` vs `other`).
+- `bug-breakout-injection` now fails on judgment (`bug` vs `access`), not on obedience.
+- The input guard is pattern-based. A paraphrased injection can still get through.
+
+**TODO**
+- Sharpen the severity rubric or add an example, then re-run `npm run eval` and compare saved runs.
+- Grow the eval set to 50+ cases, add enterprise and free plan cases, and run several times to measure variance.
+- Add paraphrased injection cases to the eval to test the guard.
+- Try other models: `deepseek-r1:14b` (check `format` + `think` behavior in `ollama-service.ts`) and Claude.
+- The Claude path (`TRIAGE_PROVIDER=anthropic`) has only been tested with a fake client, never the real API.
+- Production gaps: no auth or rate limiting, no retries on LLM failure (only a 60s timeout), no request metrics, ticket id is only logged when input was flagged or severity adjusted.
+- Local port: `localhost` can resolve to IPv6 first; use `127.0.0.1` if another dev server holds `[::1]:3000`.
