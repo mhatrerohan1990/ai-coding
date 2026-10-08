@@ -24,6 +24,7 @@ source .venv/bin/activate
 | 04 | [api_key_vault](projects/04_api_key_vault) | Multi-tenant API key vault: create, revoke, rotate, introspect (FastAPI + SQLite) · build from spec, pair-programmed | in progress |
 | 05 | [tool_proxy](projects/05_tool_proxy) | Multi-tenant authz proxy in front of MCP tools, confused-deputy safe (FastAPI + SQLite) · build from spec, pair-programmed | in progress |
 | 06 | [triage_insights](projects/06_triage_insights) | LLM support-ticket triage API: category, severity, rationale, with input/output guards and an eval harness (TypeScript, Fastify, Ollama or Claude) · build with AI, pair-programmed | in progress |
+| 08 | [agent_glossary_rag](projects/08_agent_glossary_rag) | Glossary Q&A bot to see embeddings, a vector store, RAG and evals in action; answers only from its own data (TypeScript, Fastify, Ollama) · build with AI, pair-programmed | first pass done |
 
 ## Running a session
 

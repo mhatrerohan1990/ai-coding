@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Glossary RAG</title>
+<style>
+  :root { --bg:#fff; --fg:#1a1a1a; --muted:#666; --line:#ddd; --accent:#2f5bea; --ok:#1a7f37; --bad:#b42318; --bar:#dfe6fb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16181d; --fg:#e8e8e8; --muted:#9aa0a6; --line:#2e3238; --accent:#7c9cff; --ok:#4cc26a; --bad:#ff7b72; --bar:#27304d; }
+  }
+  body { font: 16px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); max-width: 720px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; padding: 10px 12px; font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 8px; }
+  button { padding: 10px 16px; font: inherit; color: #fff; background: var(--accent); border: 0; border-radius: 8px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: wait; }
+  .examples { margin: 10px 0 24px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .examples a { font-size: .85rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; cursor: pointer; text-decoration: none; }
+  .examples a:hover { color: var(--fg); }
+  h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 24px 0 8px; }
+  .badge { font-size: .8rem; font-weight: 600; margin-left: 8px; }
+  .badge.ok { color: var(--ok); } .badge.bad { color: var(--bad); }
+  #answer { white-space: pre-wrap; }
+  .src { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: .9rem; }
+  .src .name { width: 160px; flex-shrink: 0; }
+  .src .track { flex: 1; height: 10px; background: var(--line); border-radius: 5px; position: relative; overflow: hidden; }
+  .src .fill { height: 100%; background: var(--accent); }
+  .src.below .fill { background: var(--muted); opacity: .5; }
+  .src .score { width: 50px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .hint { font-size: .8rem; color: var(--muted); }
+</style>
+</head>
+<body>
+  <h1>Agent Glossary</h1>
+  <p class="sub">Answers come only from the glossary. Anything else is refused.</p>
+
+  <form id="f">
+    <input id="q" placeholder="e.g. How does RAG work?" autocomplete="off" autofocus required minlength="3">
+    <button id="go">Ask</button>
+  </form>
+  <div class="examples" id="ex"></div>
+
+  <div id="out" hidden>
+    <h2>Answer <span id="badge" class="badge"></span></h2>
+    <div id="answer"></div>
+    <h2>Retrieved (top-k = 3)</h2>
+    <div id="sources"></div>
+    <p class="hint">Bar = cosine similarity. Grey bars are below the threshold and were not sent to the LLM.</p>
+  </div>
+
+<script>
+  const THRESHOLD = 0.5; // keep in sync with MIN_SCORE in src/rag.ts
+  const $ = (id) => document.getElementById(id);
+  const examples = ["How does RAG work?", "What is top-k?", "Why is HNSW fast?", "What is the capital of France?"];
+
+  for (const e of examples) {
+    const a = document.createElement("a");
+    a.textContent = e;
+    a.onclick = () => { $("q").value = e; $("f").requestSubmit(); };
+    $("ex").append(a);
+  }
+
+  $("f").onsubmit = async (ev) => {
+    ev.preventDefault();
+    $("go").disabled = true;
+    $("go").textContent = "Thinking...";
+    try {
+      const res = await fetch("/ask", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question: $("q").value }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || res.statusText);
+      render(data);
+    } catch (err) {
+      render({ answer: "Error: " + err.message, grounded: false, sources: [] });
+    } finally {
+      $("go").disabled = false;
+      $("go").textContent = "Ask";
+    }
+  };
+
+  function render(d) {
+    $("out").hidden = false;
+    $("answer").textContent = d.answer;
+    $("badge").textContent = d.grounded ? "grounded" : "refused";
+    $("badge").className = "badge " + (d.grounded ? "ok" : "bad");
+    $("sources").replaceChildren(...d.sources.map((s) => {
+      const row = document.createElement("div");
+      row.className = "src" + (s.score < THRESHOLD ? " below" : "");
+      const name = document.createElement("span"); name.className = "name"; name.textContent = s.term;
+      const track = document.createElement("div"); track.className = "track";
+      const fill = document.createElement("div"); fill.className = "fill"; fill.style.width = Math.max(0, s.score) * 100 + "%";
+      track.append(fill);
+      const score = document.createElement("span"); score.className = "score"; score.textContent = s.score.toFixed(3);
+      row.append(name, track, score);
+      return row;
+    }));
+  }
+</script>
+</body>
+</html>
