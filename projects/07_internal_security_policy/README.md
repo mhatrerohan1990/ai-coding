@@ -81,7 +81,8 @@ Behavior:
 
 - Only information from the excerpts is used; citations are excerpt ids, and unknown ids are dropped.
 - If the model doesn't refuse but returns no valid citation, it is retried once with the validation error, then a `TypeError` is thrown (HTTP 500).
-- Each model call times out after 8 seconds and is capped at 300 tokens.
+- The first model call times out after 8 seconds and the retry after 16 seconds. Each call is capped at 300 tokens.
+- Answers must be 1-3 complete sentences ending in punctuation. Otherwise the same retry-then-`TypeError` path applies.
 
 ## Scripts
 
@@ -100,9 +101,10 @@ Behavior:
 - **Result shape:** `{ answer: string, citations: string[], refused: boolean }`. `citations` are excerpt ids.
 - **Citation validation:** every cited id must be one of the input excerpt ids. Unknown ids are dropped.
 - **Retry then fail:** if no valid citation remains and the model did not refuse, retry once with the validation error, then throw a `TypeError`.
-- **Limits:** 8 second timeout per model call and about 300 completion tokens.
+- **Limits:** 8 second timeout on the first model call, 16 seconds on the retry, and about 300 completion tokens per call.
 - **Prompt:** built in its own function (`buildPrompt`). Excerpts go in a delimited `<excerpts>` block and the model is told that block is data, not instructions.
-- **Answer length:** 1-3 complete sentences, not a few words.
+- **Answer length:** 1-3 complete sentences, not a few words. Enforced in code (sentence count and terminal punctuation in `check()`), with a violation going through the same retry-then-`TypeError` path. The system prompt also has a few few-shot examples (answer, two-citation answer, refusal).
+- **Input gate:** `answerQuestion` rejects more than 5 excerpts up front with a `RangeError` (before any model call). Zero excerpts returns a refusal.
 - **Swappable client:** the LLM call sits behind an `LlmClient` interface (`src/llmClient.ts`). Ollama is the default (`src/ollamaClient.ts`). Another provider, such as Claude, can be added by writing one more `LlmClient` and passing it to `answerQuestion(input, client)`. No Claude client is included.
 
 ## What AI assistance was used for
@@ -117,7 +119,6 @@ Claude Code acted as an assistant while I drove the design and made the decision
 
 ## Known issues
 
-- The model sometimes answers with a short fragment instead of 1-3 sentences, even with the rule in the system prompt (seen on single-fact questions). The schema can't enforce sentence length.
+- The sentence check is a punctuation-based heuristic. A short phrase that happens to end in a period would pass.
 - Timeouts and the `TypeError` currently reach Fastify's default handler and return a generic HTTP 500.
-- The 8 second timeout is per model call, so a retry can bring the worst case to about 16 seconds.
-- The 5 excerpt limit is only a comment on the type and is not enforced.
+- Timeouts are per model call (8s, then 16s on the retry), so the worst case is about 24 seconds.

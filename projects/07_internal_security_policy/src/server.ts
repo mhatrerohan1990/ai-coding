@@ -1,8 +1,10 @@
 import Fastify from "fastify";
 import { answerQuestion } from "./answerQuestion.js";
+import { errorHandler } from "./errorHandler.js";
 import type { AskInput } from "./types.js";
 
 const app = Fastify({ logger: true });
+app.setErrorHandler(errorHandler);
 
 app.get("/health", async () => ({ status: "ok" }));
 
