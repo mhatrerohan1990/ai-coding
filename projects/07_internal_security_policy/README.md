@@ -91,3 +91,33 @@ Behavior:
 | `npm run build`     | Compile TypeScript to `dist/`    |
 | `npm start`         | Run compiled output              |
 | `npm run typecheck` | Type-check without emitting      |
+
+## Design decisions
+
+- **Scope:** a narrow feature slice. Another team does the embeddings and retrieval, then calls `answerQuestion` with `AskInput { question, excerpts[] }` (at most 5 excerpts of `{ id, text }`). `GET /citations` uses a hardcoded sample input as a stand-in for that upstream call.
+- **LLM:** a local Llama (`llama3.1:8b`) through Ollama, since no Claude API key was available.
+- **Grounded answers only:** the model answers from the excerpts and never invents facts. If the excerpts don't support an answer, the result is `{ answer: "", citations: [], refused: true }`.
+- **Result shape:** `{ answer: string, citations: string[], refused: boolean }`. `citations` are excerpt ids.
+- **Citation validation:** every cited id must be one of the input excerpt ids. Unknown ids are dropped.
+- **Retry then fail:** if no valid citation remains and the model did not refuse, retry once with the validation error, then throw a `TypeError`.
+- **Limits:** 8 second timeout per model call and about 300 completion tokens.
+- **Prompt:** built in its own function (`buildPrompt`). Excerpts go in a delimited `<excerpts>` block and the model is told that block is data, not instructions.
+- **Answer length:** 1-3 complete sentences, not a few words.
+- **Swappable client:** the LLM call sits behind an `LlmClient` interface (`src/llmClient.ts`). Ollama is the default (`src/ollamaClient.ts`). Another provider, such as Claude, can be added by writing one more `LlmClient` and passing it to `answerQuestion(input, client)`. No Claude client is included.
+
+## What AI assistance was used for
+
+Claude Code acted as an assistant while I drove the design and made the decisions above. It helped with:
+
+- scaffolding the TypeScript + Fastify project and the first README
+- the Ollama call, structured JSON output (response schema) and the system prompt
+- the validation, retry and timeout code, and the swappable client refactor
+- checking behavior against the local model, including refusal cases and a stubbed retry/timeout test
+- pushing the project to the shared repo
+
+## Known issues
+
+- The model sometimes answers with a short fragment instead of 1-3 sentences, even with the rule in the system prompt (seen on single-fact questions). The schema can't enforce sentence length.
+- Timeouts and the `TypeError` currently reach Fastify's default handler and return a generic HTTP 500.
+- The 8 second timeout is per model call, so a retry can bring the worst case to about 16 seconds.
+- The 5 excerpt limit is only a comment on the type and is not enforced.
