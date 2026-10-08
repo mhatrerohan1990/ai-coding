@@ -1,7 +1,6 @@
 import type { AskInput, AskResult } from "./types.js";
-
-const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "llama3.1:8b";
+import type { LlmClient, Message } from "./llmClient.js";
+import { ollamaClient } from "./ollamaClient.js";
 
 const RESPONSE_SCHEMA = {
   type: "object",
@@ -17,8 +16,6 @@ const TIMEOUT_MS = 8_000;
 const MAX_TOKENS = 300;
 
 const REFUSED: AskResult = { answer: "", citations: [], refused: true };
-
-type Message = { role: "system" | "user" | "assistant"; content: string };
 
 function buildPrompt({ question, excerpts }: AskInput): Message[] {
   const system = `You answer questions using ONLY the excerpts provided by the user.
@@ -40,28 +37,6 @@ Respond with JSON only.`;
     { role: "system", content: system },
     { role: "user", content: user },
   ];
-}
-
-async function callModel(messages: Message[]): Promise<string> {
-  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      stream: false,
-      format: RESPONSE_SCHEMA,
-      options: { temperature: 0, num_predict: MAX_TOKENS },
-      messages,
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Ollama request failed: ${res.status} ${await res.text()}`);
-  }
-
-  const data = (await res.json()) as { message: { content: string } };
-  return data.message.content;
 }
 
 type Checked = { ok: true; result: AskResult } | { ok: false; error: string };
@@ -91,7 +66,13 @@ function check(raw: string, validIds: Set<string>): Checked {
   return { ok: true, result: { answer: parsed.answer, citations, refused: false } };
 }
 
-export async function answerQuestion(input: AskInput): Promise<AskResult> {
+export async function answerQuestion(
+  input: AskInput,
+  client: LlmClient = ollamaClient,
+): Promise<AskResult> {
+  const callModel = (messages: Message[]) =>
+    client({ messages, schema: RESPONSE_SCHEMA, timeoutMs: TIMEOUT_MS, maxTokens: MAX_TOKENS });
+
   if (input.excerpts.length === 0) return REFUSED;
 
   const validIds = new Set(input.excerpts.map((e) => e.id));
